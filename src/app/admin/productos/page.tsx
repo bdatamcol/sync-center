@@ -799,183 +799,114 @@ export default function ProductosPage() {
 
     setBulkSyncModalOpen(true);
     setBulkSyncStatus('syncing');
-    setBulkSyncMessage('Iniciando sincronización masiva inteligente...');
+    setBulkSyncMessage('Iniciando sincronización masiva optimizada...');
     setBulkSyncProgress({ current: 0, total: productsToSync.length });
     setBulkSyncResults({ success: 0, errors: 0, details: [] });
 
-    let successCount = 0;
-    let errorCount = 0;
-    let processedCount = 0;
-    let totalResponseTime = 0;
-    const details: Array<{product: string; success: boolean; message: string}> = [];
-    const failedProducts: Product[] = [];
-
-    // Configuración fija de lotes
-    let currentBatchSize = 100;
-    const BATCH_DELAY = 1000;
-
-    setBulkSyncMessage(`Sincronización inteligente: ${productsToSync.length} de ${allProducts.length} productos requieren actualización`);
-
-    // Dividir productos en lotes dinámicos
-    let batchIndex = 0;
-    let productIndex = 0;
-
-    while (productIndex < productsToSync.length) {
-      const batch = productsToSync.slice(productIndex, productIndex + currentBatchSize);
-      const batchNumber = batchIndex + 1;
-      const batchStartTime = Date.now();
-      
-      setBulkSyncMessage(`Procesando lote ${batchNumber} con ${batch.length} productos (lote fijo: ${currentBatchSize})...`);
-
-      // Procesar lote con concurrencia limitada (máximo 10 procesos simultáneos)
-      const CONCURRENCY_LIMIT = 10;
-      const batchResults: Array<{ product: string; success: boolean; message: string; responseTime: number; productData: Product }> = [];
-      let nextIndex = 0;
-
-      const worker = async () => {
-        while (true) {
-          const idx = nextIndex++;
-          if (idx >= batch.length) break;
-          const product = batch[idx];
-          const startTime = Date.now();
-          try {
-            const result = await apiService.syncProductWithWooCommerce(product);
-            const responseTime = Date.now() - startTime;
-            totalResponseTime += responseTime;
-
-            if (result.success) {
-              const cacheKey = `${product.cod_item}_${product.precioActual}_${product.existencia}`;
-              setSyncCache(prev => new Map(prev.set(cacheKey, {
-                timestamp: Date.now(),
-                existencia: product.existencia,
-                precio: product.precioActual,
-                result
-              })));
-            }
-
-            batchResults.push({
-              product: product.cod_item || 'Sin código',
-              success: result.success,
-              message: result.success ? result.message : (result.error || result.message),
-              responseTime,
-              productData: product
-            });
-          } catch (error) {
-            const responseTime = Date.now() - startTime;
-            totalResponseTime += responseTime;
-            batchResults.push({
-              product: product.cod_item || 'Sin código',
-              success: false,
-              message: 'Error de conexión durante la sincronización',
-              responseTime,
-              productData: product
-            });
-          }
-        }
-      };
-
-      const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, batch.length) }, () => worker());
-      await Promise.all(workers);
-      const batchEndTime = Date.now();
-      const batchDuration = batchEndTime - batchStartTime;
-
-      // Procesar resultados y actualizar métricas
-      let batchSuccessCount = 0;
-      let batchErrorCount = 0;
-
-      batchResults.forEach(({ product, success, message, productData }) => {
-        if (success) {
-          successCount++;
-          batchSuccessCount++;
-        } else {
-          errorCount++;
-          batchErrorCount++;
-          failedProducts.push(productData);
-        }
-        
-        details.push({ product, success, message });
-        processedCount++;
-        
-        setBulkSyncProgress({ current: processedCount, total: productsToSync.length });
-        setBulkSyncResults({ success: successCount, errors: errorCount, details: [...details] });
-      });
-
-      // Actualizar métricas de rendimiento
-      const avgResponseTime = totalResponseTime / processedCount;
-      const successRate = (batchSuccessCount / batch.length) * 100;
-      
-      setBatchPerformance({
-        currentBatchSize,
-        successRate,
-        avgResponseTime,
-        errorCount: batchErrorCount
-      });
-
-      // Actualizar métricas en tiempo real
-      const totalBatches = Math.ceil(productsToSync.length / 100);
-      updateRealTimeMetrics(processedCount, productsToSync.length, batchIndex + 1, totalBatches);
-
-      // Mantener lote fijo de 100
-      currentBatchSize = 100;
-
-      productIndex += batch.length;
-      batchIndex++;
-
-      // Pausa entre lotes
-      if (productIndex < productsToSync.length) {
-        setBulkSyncMessage(`Lote ${batchNumber} completado (${batchSuccessCount}/${batch.length} exitosos). Pausa de ${BATCH_DELAY/1000}s antes del siguiente lote...`);
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
-      }
-    }
-
-    // Procesar reintentos para productos fallidos
-    if (failedProducts.length > 0) {
-      setBulkSyncMessage(`Reintentando ${failedProducts.length} productos fallidos...`);
-      
-      const retryPromises = failedProducts.map(product => retryFailedProduct(product));
-      const retryResults = await Promise.all(retryPromises);
-      
-      // Actualizar resultados con reintentos
-      retryResults.forEach(({ product, success, message }) => {
-        // Encontrar y actualizar el resultado original
-        const originalIndex = details.findIndex(d => d.product === product && !d.success);
-        if (originalIndex !== -1) {
-          if (success) {
-            successCount++;
-            errorCount--;
-            details[originalIndex] = { product, success: true, message };
-          } else {
-            details[originalIndex] = { product, success: false, message };
-          }
-        }
-      });
-      
-      setBulkSyncResults({ success: successCount, errors: errorCount, details: [...details] });
-    }
-
-    // Paso adicional: productos en WooCommerce que NO existen en Novasoft -> stock 0 y estado "draft"
     try {
-      setBulkSyncMessage('Ajustando productos ausentes en Novasoft: stock 0 y estado borrador...');
-      const adjustResult = await apiService.markMissingWooProductsAsDraft(allProducts);
-      const summaryMsg = `Ajuste completado: ${adjustResult.updated}/${adjustResult.totalCandidates} productos marcados como borrador con stock 0${adjustResult.failed ? `, ${adjustResult.failed} errores` : ''}.`;
-      details.push({ product: 'Ajuste de ausentes', success: adjustResult.failed === 0, message: summaryMsg });
-      setBulkSyncResults({ success: successCount, errors: errorCount + adjustResult.failed, details: [...details] });
-    } catch (error) {
-      const errMsg = 'Error ajustando productos ausentes en Novasoft';
-      details.push({ product: 'Ajuste de ausentes', success: false, message: errMsg });
-      setBulkSyncResults({ success: successCount, errors: errorCount + 1, details: [...details] });
-    }
+      // Usar la nueva función optimizada que solo actualiza productos existentes en WooCommerce
+      const result = await apiService.syncAllProductsOptimized(
+        productsToSync,
+        {
+          onProgress: (current, total, message) => {
+            setBulkSyncProgress({ current, total });
+            setBulkSyncMessage(message);
+            
+            // Actualizar métricas en tiempo real
+            const totalBatches = Math.ceil(total / 100);
+            const completedBatches = Math.floor(current / 100);
+            updateRealTimeMetrics(current, total, completedBatches, totalBatches);
+          },
+          onBatchComplete: (batchResults) => {
+            // Actualizar resultados en tiempo real
+            const details = batchResults.map(r => ({
+              product: r.product,
+              success: r.success,
+              message: r.message
+            }));
+            
+            const successCount = batchResults.filter(r => r.success).length;
+            const errorCount = batchResults.filter(r => !r.success).length;
+            
+            setBulkSyncResults(prev => ({
+              success: prev.success + successCount,
+              errors: prev.errors + errorCount,
+              details: [...prev.details, ...details]
+            }));
 
-    // Determinar estado final
-    if (errorCount === 0) {
-      setBulkSyncStatus('success');
-      setBulkSyncMessage(`✅ Sincronización completada exitosamente. ${successCount} productos actualizados y ausentes ajustados.`);
-    } else if (successCount === 0) {
+            // Actualizar métricas de rendimiento
+            const avgResponseTime = batchResults.reduce((sum, r) => sum + (r.responseTime || 0), 0) / batchResults.length;
+            const successRate = (successCount / batchResults.length) * 100;
+            
+            setBatchPerformance({
+              currentBatchSize: batchResults.length,
+              successRate,
+              avgResponseTime,
+              errorCount
+            });
+          }
+        }
+      );
+
+      // Actualizar cache para productos sincronizados exitosamente
+      result.results.forEach(syncResult => {
+        if (syncResult.success && syncResult.productData) {
+          const product = syncResult.productData;
+          const cacheKey = `${product.cod_item}_${product.precioActual}_${product.existencia}`;
+          setSyncCache(prev => new Map(prev.set(cacheKey, {
+            timestamp: Date.now(),
+            existencia: product.existencia,
+            precio: product.precioActual,
+            result: {
+              success: true,
+              message: syncResult.message,
+              productId: syncResult.productId
+            }
+          })));
+        }
+      });
+
+      // Paso adicional: productos en WooCommerce que NO existen en Novasoft -> stock 0 y estado "draft"
+      try {
+        setBulkSyncMessage('Ajustando productos ausentes en Novasoft: stock 0 y estado borrador...');
+        const adjustResult = await apiService.markMissingWooProductsAsDraft(allProducts);
+        const summaryMsg = `Ajuste completado: ${adjustResult.updated}/${adjustResult.totalCandidates} productos marcados como borrador con stock 0${adjustResult.failed ? `, ${adjustResult.failed} errores` : ''}.`;
+        
+        setBulkSyncResults(prev => ({
+          ...prev,
+          errors: prev.errors + adjustResult.failed,
+          details: [...prev.details, { product: 'Ajuste de ausentes', success: adjustResult.failed === 0, message: summaryMsg }]
+        }));
+      } catch (error) {
+        const errMsg = 'Error ajustando productos ausentes en Novasoft';
+        setBulkSyncResults(prev => ({
+          ...prev,
+          errors: prev.errors + 1,
+          details: [...prev.details, { product: 'Ajuste de ausentes', success: false, message: errMsg }]
+        }));
+      }
+
+      // Determinar estado final basado en los resultados
+      const finalResults = result.results;
+      const successCount = finalResults.filter(r => r.success).length;
+      const errorCount = finalResults.filter(r => !r.success).length;
+
+      if (errorCount === 0) {
+        setBulkSyncStatus('success');
+        setBulkSyncMessage(`✅ Sincronización optimizada completada exitosamente. ${successCount} productos actualizados (solo productos existentes en WooCommerce).`);
+      } else if (successCount === 0) {
+        setBulkSyncStatus('error');
+        setBulkSyncMessage(`❌ Error en la sincronización optimizada. ${errorCount} productos fallaron.`);
+      } else {
+        setBulkSyncStatus('partial');
+        setBulkSyncMessage(`⚠️ Sincronización optimizada parcial completada. ${successCount} exitosos, ${errorCount} errores.`);
+      }
+
+    } catch (error) {
+      console.error('Error en sincronización optimizada:', error);
       setBulkSyncStatus('error');
-      setBulkSyncMessage(`❌ Error en la sincronización. ${errorCount} productos fallaron incluso con reintentos.`);
-    } else {
-      setBulkSyncStatus('partial');
-      setBulkSyncMessage(`⚠️ Sincronización parcial completada. ${successCount} exitosos, ${errorCount} errores persistentes (incluye ajustes de ausentes).`);
+      setBulkSyncMessage(`❌ Error crítico en la sincronización optimizada: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+      setBulkSyncResults({ success: 0, errors: 1, details: [{ product: 'Sistema', success: false, message: 'Error crítico en la sincronización' }] });
     }
   };
 

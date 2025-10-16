@@ -946,6 +946,232 @@ class ApiService {
     };
   }
 
+  // Nueva función optimizada para sincronización masiva que solo actualiza productos existentes
+  async syncAllProductsOptimized(
+    products: Product[],
+    callbacks?: {
+      onProgress?: (current: number, total: number, message: string) => void;
+      onBatchComplete?: (batchResults: Array<{
+        product: string;
+        success: boolean;
+        message: string;
+        responseTime?: number;
+      }>) => void;
+    }
+  ): Promise<{
+    success: boolean;
+    results: Array<{ 
+      product: string; 
+      success: boolean; 
+      message: string; 
+      productId?: number;
+      productData?: Product;
+    }>;
+    summary: { 
+      total: number; 
+      successful: number; 
+      failed: number; 
+      skipped: number;
+      existingInWoo: number;
+      totalNovasoft: number;
+    };
+  }> {
+    const results: Array<{ product: Product; result: SyncResult }> = [];
+    const validProducts = products.filter(p => p.cod_item && p.cod_item.trim());
+    
+    if (validProducts.length === 0) {
+      return {
+        success: true,
+        results: [],
+        summary: { 
+          total: 0, 
+          successful: 0, 
+          failed: 0, 
+          skipped: 0,
+          existingInWoo: 0,
+          totalNovasoft: products.length
+        }
+      };
+    }
+
+    // Fase 1: Obtener todos los productos de WooCommerce
+    if (callbacks?.onProgress) {
+      callbacks.onProgress(0, validProducts.length, 'Obteniendo lista de productos existentes en WooCommerce...');
+    }
+
+    const wooProducts = await this.getAllWooProducts();
+    const wooSkuMap = new Map<string, WooCommerceProduct>();
+    
+    // Crear mapa de SKUs existentes en WooCommerce
+    wooProducts.forEach(wooProduct => {
+      if (wooProduct.sku && wooProduct.sku.trim()) {
+        wooSkuMap.set(wooProduct.sku.trim().toLowerCase(), wooProduct);
+      }
+    });
+
+    // Fase 2: Filtrar productos que existen en WooCommerce
+    if (callbacks?.onProgress) {
+      callbacks.onProgress(0, validProducts.length, `Comparando ${validProducts.length} productos de Novasoft con ${wooProducts.length} productos de WooCommerce...`);
+    }
+
+    const productsToSync: Product[] = [];
+    const skippedProducts: Product[] = [];
+
+    validProducts.forEach(product => {
+      const sku = product.cod_item!.trim().toLowerCase();
+      if (wooSkuMap.has(sku)) {
+        productsToSync.push(product);
+      } else {
+        skippedProducts.push(product);
+        // Agregar resultado para productos no encontrados
+        results.push({
+          product,
+          result: {
+            success: false,
+            message: 'Producto no encontrado en WooCommerce - omitido',
+            error: `SKU ${product.cod_item} no existe en WooCommerce`
+          }
+        });
+      }
+    });
+
+    if (callbacks?.onProgress) {
+      callbacks.onProgress(0, productsToSync.length, `Sincronizando ${productsToSync.length} productos existentes (${skippedProducts.length} omitidos)...`);
+    }
+
+    // Fase 3: Sincronizar solo los productos que existen en WooCommerce
+    let successful = 0;
+    let failed = 0;
+    let processedCount = 0;
+
+    // Procesar en lotes para mejor rendimiento
+    const BATCH_SIZE = 100;
+    const CONCURRENCY_LIMIT = 50;
+    const finalResults: Array<{ 
+      product: string; 
+      success: boolean; 
+      message: string; 
+      productId?: number;
+      productData?: Product;
+    }> = [];
+
+    for (let i = 0; i < productsToSync.length; i += BATCH_SIZE) {
+      const batch = productsToSync.slice(i, i + BATCH_SIZE);
+      let nextIndex = 0;
+      const batchResults: Array<{
+        product: string;
+        success: boolean;
+        message: string;
+        responseTime?: number;
+      }> = [];
+
+      const worker = async () => {
+        while (true) {
+          const idx = nextIndex++;
+          if (idx >= batch.length) break;
+
+          const product = batch[idx];
+          const startTime = Date.now();
+          let result: SyncResult;
+
+          try {
+            // Usar la función existente pero sabemos que el producto existe
+            const sku = product.cod_item!.trim().toLowerCase();
+            const wooProduct = wooSkuMap.get(sku)!;
+
+            // Preparar datos de actualización
+            const updateData: Partial<WooCommerceProduct> = {
+              manage_stock: true,
+              stock_quantity: product.existencia || 0,
+              in_stock: (product.existencia || 0) > 0
+            };
+
+            // Actualizar precios si están disponibles
+            if (product.precioAnterior && product.precioAnterior > 0) {
+              updateData.regular_price = product.precioAnterior.toString();
+            }
+            
+            if (product.precioActual && product.precioActual > 0) {
+              updateData.sale_price = product.precioActual.toString();
+            }
+
+            // Actualizar producto en WooCommerce
+            const updatedProduct = await this.updateWooCommerceProduct(wooProduct.id, updateData);
+
+            result = {
+              success: true,
+              message: 'Producto sincronizado exitosamente (optimizado)',
+              productData: updatedProduct
+            };
+          } catch (error) {
+            result = {
+              success: false,
+              message: 'Error durante la sincronización optimizada',
+              error: error instanceof Error ? error.message : 'Error desconocido'
+            };
+          }
+
+          const responseTime = Date.now() - startTime;
+          const syncResult = {
+            product: product.cod_item || 'Sin código',
+            success: result.success,
+            message: result.success ? result.message : (result.error || result.message),
+            productId: result.productData?.id,
+            productData: product
+          };
+
+          results.push({ product, result });
+          finalResults.push(syncResult);
+          batchResults.push({
+            product: syncResult.product,
+            success: syncResult.success,
+            message: syncResult.message,
+            responseTime
+          });
+          processedCount++;
+
+          if (result.success) {
+            successful++;
+          } else {
+            failed++;
+          }
+
+          if (callbacks?.onProgress) {
+            callbacks.onProgress(processedCount, productsToSync.length, `Sincronizando productos existentes... (${processedCount}/${productsToSync.length})`);
+          }
+        }
+      };
+
+      // Ejecutar workers concurrentes
+      const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, batch.length) }, () => worker());
+      await Promise.all(workers);
+
+      // Llamar callback de lote completado
+      if (callbacks?.onBatchComplete && batchResults.length > 0) {
+        callbacks.onBatchComplete(batchResults);
+      }
+
+      // Pequeña pausa entre lotes
+      if (i + BATCH_SIZE < productsToSync.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    const success = failed === 0;
+    return {
+      success,
+      results: finalResults,
+      summary: {
+        total: validProducts.length,
+        successful,
+        failed,
+        skipped: skippedProducts.length,
+        existingInWoo: productsToSync.length,
+        totalNovasoft: products.length
+      }
+    };
+  }
+
   async syncAllProducts(
     products: Product[],
     onProgress?: (progress: {
