@@ -13,14 +13,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RefreshCw, AlertCircle, Search, ChevronUp, ChevronDown, RotateCw, Plus } from "lucide-react";
-import { apiService, Product, SyncResult } from "@/lib/api";
+import { apiService, Product, SyncResult, IndividualSyncResult } from "@/lib/api";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type SyncCacheEntry = {
   timestamp: number;
   existencia?: number;
   precio?: number;
-  result: SyncResult;
+  result: IndividualSyncResult;
 };
 
 export default function ProductosPage() {
@@ -741,7 +741,12 @@ export default function ProductosPage() {
           timestamp: Date.now(),
           existencia: product.existencia,
           precio: product.precioActual,
-          result: result
+          result: {
+            success: result.success,
+            message: result.message,
+            productId: result.productData?.id || 0,
+            product: product.cod_item || 'Sin código'
+          }
         })));
         
         return {
@@ -860,7 +865,8 @@ export default function ProductosPage() {
             result: {
               success: true,
               message: syncResult.message,
-              productId: syncResult.productId
+              productId: syncResult.productId,
+              product: syncResult.product
             }
           })));
         }

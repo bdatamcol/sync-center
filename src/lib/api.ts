@@ -93,6 +93,14 @@ export interface SyncResult {
   error?: string;
 }
 
+export interface IndividualSyncResult {
+  product: string;
+  success: boolean;
+  message: string;
+  productId?: number;
+  productData?: Product;
+}
+
 export interface ProductsResponse {
   success: boolean;
   data?: Product[];
@@ -994,10 +1002,10 @@ class ApiService {
       };
     }
 
+    const { onProgress = () => {}, onBatchComplete = () => {} } = callbacks || {};
+
     // Fase 1: Obtener todos los productos de WooCommerce
-    if (callbacks?.onProgress) {
-      callbacks.onProgress(0, validProducts.length, 'Obteniendo lista de productos existentes en WooCommerce...');
-    }
+    onProgress(0, validProducts.length, 'Obteniendo lista de productos existentes en WooCommerce...');
 
     const wooProducts = await this.getAllWooProducts();
     const wooSkuMap = new Map<string, WooCommerceProduct>();
@@ -1011,7 +1019,7 @@ class ApiService {
 
     // Fase 2: Filtrar productos que existen en WooCommerce
     if (callbacks?.onProgress) {
-      callbacks.onProgress(0, validProducts.length, `Comparando ${validProducts.length} productos de Novasoft con ${wooProducts.length} productos de WooCommerce...`);
+      onProgress(0, validProducts.length, `Comparando ${validProducts.length} productos de Novasoft con ${wooProducts.length} productos de WooCommerce...`);
     }
 
     const productsToSync: Product[] = [];
@@ -1036,7 +1044,7 @@ class ApiService {
     });
 
     if (callbacks?.onProgress) {
-      callbacks.onProgress(0, productsToSync.length, `Sincronizando ${productsToSync.length} productos existentes (${skippedProducts.length} omitidos)...`);
+      onProgress(0, productsToSync.length, `Sincronizando ${productsToSync.length} productos existentes (${skippedProducts.length} omitidos)...`);
     }
 
     // Fase 3: Sincronizar solo los productos que existen en WooCommerce
@@ -1137,7 +1145,7 @@ class ApiService {
           }
 
           if (callbacks?.onProgress) {
-            callbacks.onProgress(processedCount, productsToSync.length, `Sincronizando productos existentes... (${processedCount}/${productsToSync.length})`);
+            onProgress(processedCount, productsToSync.length, `Sincronizando productos existentes... (${processedCount}/${productsToSync.length})`);
           }
         }
       };
@@ -1148,7 +1156,7 @@ class ApiService {
 
       // Llamar callback de lote completado
       if (callbacks?.onBatchComplete && batchResults.length > 0) {
-        callbacks.onBatchComplete(batchResults);
+        onBatchComplete(batchResults);
       }
 
       // Pequeña pausa entre lotes
