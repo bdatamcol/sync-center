@@ -374,7 +374,7 @@ class ApiService {
         try {
           return await response.json();
         } catch {
-          return undefined as any;
+          return undefined;
         }
       }
 
@@ -384,7 +384,9 @@ class ApiService {
         // Intentar extraer detalles de error de WooCommerce
         try {
           const errorJson = await response.json();
-          const detail = (errorJson as any)?.message || JSON.stringify(errorJson);
+          const detail = (typeof errorJson === 'object' && errorJson && 'message' in errorJson)
+            ? String((errorJson as { message?: unknown }).message ?? '')
+            : JSON.stringify(errorJson);
           throw new Error(`WooCommerce API Error: ${response.status} ${response.statusText} - ${detail}`);
         } catch {
           const errorText = await response.text();
@@ -744,7 +746,7 @@ class ApiService {
 
   async batchUpdateWooProducts(
     updates: Array<{ id: number } & Partial<WooCommerceProduct>>
-  ): Promise<{ updated: number; failed: number; responses: any[] }> {
+  ): Promise<{ updated: number; failed: number; responses: unknown[] }> {
     try {
       if (!updates || updates.length === 0) {
         return { updated: 0, failed: 0, responses: [] };
@@ -752,14 +754,16 @@ class ApiService {
       const chunkSize = 100;
       let updated = 0;
       let failed = 0;
-      const responses: any[] = [];
+      const responses: unknown[] = [];
 
       for (let i = 0; i < updates.length; i += chunkSize) {
         const chunk = updates.slice(i, i + chunkSize);
         try {
           const res = await this.makeWooCommerceRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
           responses.push(res);
-          const count = Array.isArray(res?.update) ? res.update.length : chunk.length;
+          const count = (typeof res === 'object' && res !== null && Array.isArray((res as { update?: unknown[] }).update))
+            ? ((res as { update: unknown[] }).update.length)
+            : chunk.length;
           updated += count;
         } catch (err) {
           failed += chunk.length;
@@ -1165,10 +1169,10 @@ class ApiService {
       const wcSale = wcSalePresent ? Number(wcSaleRaw) : undefined;
 
       if (expectedSale === undefined) {
-        if (wcSalePresent) { (upd as any).sale_price = ''; changed = true; }
+        if (wcSalePresent) { upd.sale_price = ''; changed = true; }
       } else {
         if (!wcSalePresent || wcSale !== expectedSale) {
-          (upd as any).sale_price = String(expectedSale);
+          upd.sale_price = String(expectedSale);
           changed = true;
         }
       }
