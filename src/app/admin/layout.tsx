@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { Home, Package, LogOut, History } from "lucide-react";
+import { Home, Package, LogOut, History, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiService } from "@/lib/api";
 
@@ -17,6 +17,11 @@ const menuItems = [
     title: "Productos en Novasoft",
     url: "/admin/productos",
     icon: Package,
+  },
+  {
+    title: "Productos sin relacionar",
+    url: "/admin/productos-sin-relacionar",
+    icon: AlertCircle,
   },
   {
     title: "Historial de Cron",

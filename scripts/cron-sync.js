@@ -51,33 +51,65 @@ function base64Auth(key, secret) {
   return Buffer.from(`${key}:${secret}`).toString('base64');
 }
 
-async function makeWooRequest(endpoint, method = 'GET', data) {
+async function makeWooRequest(endpoint, method = 'GET', data, opts = {}) {
   const url = `${WOOCOMMERCE_CONFIG.url}wp-json/${WOOCOMMERCE_CONFIG.version}/${endpoint}`;
   const auth = base64Auth(WOOCOMMERCE_CONFIG.key, WOOCOMMERCE_CONFIG.secret);
-  const options = {
-    method,
-    headers: {
-      'Authorization': `Basic ${auth}`,
-      'Content-Type': 'application/json',
-    },
-  };
+  const { retries = 3, retryDelayMs = 500 } = opts;
 
-  if (data && (method === 'POST' || method === 'PUT')) {
-    options.body = JSON.stringify(data);
-  }
+  let attempt = 0;
+  while (true) {
+    const options = {
+      method,
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json',
+      },
+    };
 
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    let detail;
-    try {
-      const j = await res.json();
-      detail = j?.message || JSON.stringify(j);
-    } catch {
-      detail = await res.text();
+    if (data && (method === 'POST' || method === 'PUT')) {
+      options.body = JSON.stringify(data);
     }
-    throw new Error(`WooCommerce API Error: ${res.status} ${res.statusText} - ${detail}`);
+
+    let res;
+    try {
+      res = await fetch(url, options);
+    } catch (networkErr) {
+      if (attempt < retries) {
+        const delay = retryDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 100);
+        await new Promise((r) => setTimeout(r, delay));
+        attempt++;
+        continue;
+      }
+      throw networkErr;
+    }
+
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch {
+        return undefined;
+      }
+    }
+
+    const status = res.status;
+    const retriable = status === 429 || status === 502 || status === 503 || status === 504;
+    if (!retriable || attempt >= retries) {
+      let detail;
+      try {
+        const j = await res.json();
+        detail = j?.message || JSON.stringify(j);
+      } catch {
+        detail = await res.text();
+      }
+      throw new Error(`WooCommerce API Error: ${res.status} ${res.statusText} - ${detail}`);
+    }
+
+    const retryAfter = Number(res.headers.get('Retry-After') || 0);
+    const baseDelay = retryAfter ? retryAfter * 1000 : retryDelayMs * Math.pow(2, attempt);
+    const jitter = Math.floor(Math.random() * 250);
+    await new Promise((r) => setTimeout(r, baseDelay + jitter));
+    attempt++;
   }
-  return res.json();
 }
 
 async function searchProductBySku(sku) {
@@ -100,6 +132,24 @@ async function updateWooProduct(productId, updateData) {
   }
 }
 
+async function batchUpdateWooProducts(updates, opts = {}) {
+  if (!Array.isArray(updates) || updates.length === 0) return { updated: 0, failed: 0 };
+  const chunkSize = 100;
+  let updated = 0, failed = 0;
+  for (let i = 0; i < updates.length; i += chunkSize) {
+    const chunk = updates.slice(i, i + chunkSize);
+    try {
+      await makeWooRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600, ...opts });
+      updated += chunk.length;
+    } catch (err) {
+      failed += chunk.length;
+      console.warn('Batch update failed:', err?.message || err);
+    }
+    await new Promise(r => setTimeout(r, 120));
+  }
+  return { updated, failed };
+}
+
 // Obtener todos los productos de WooCommerce con paginación
 async function getAllWooProducts() {
   const perPage = 100;
@@ -107,7 +157,7 @@ async function getAllWooProducts() {
   const all = [];
   try {
     while (true) {
-      const products = await makeWooRequest(`products?per_page=${perPage}&page=${page}&status=any`);
+      const products = await makeWooRequest(`products?per_page=${perPage}&page=${page}&status=any&_fields=id,sku,regular_price,sale_price,stock_quantity,manage_stock,in_stock,status`);
       if (Array.isArray(products)) {
         all.push(...products);
         if (products.length < perPage) break;
@@ -290,83 +340,107 @@ async function syncAllProductsOptimized(products) {
 
   console.log(`Sincronizando ${productsToSync.length} productos existentes (${skippedProducts.length} omitidos)...`);
 
-  // Fase 3: Sincronizar solo los productos que existen en WooCommerce
+  // Fase 3: Sincronizar solo los productos que existen en WooCommerce (batch + diff)
   let successful = 0;
   let failed = 0;
   let processedCount = 0;
 
-  // Procesar en lotes para mejor rendimiento
-  const BATCH_SIZE = 50;
-  const CONCURRENCY_LIMIT = 10;
+  // Construir diffs mínimos por producto existente
+  const diffs = [];
+  const skuToId = new Map();
+  for (const product of productsToSync) {
+    const sku = String(product.cod_item).trim().toLowerCase();
+    const wooProduct = wooSkuMap.get(sku);
+    if (!wooProduct) continue;
+    skuToId.set(sku, wooProduct.id);
 
-  for (let i = 0; i < productsToSync.length; i += BATCH_SIZE) {
-    const batch = productsToSync.slice(i, i + BATCH_SIZE);
-    let nextIndex = 0;
+    const nsStock = Number(product.existencia || 0);
+    const nsInStock = nsStock > 0;
 
-    const worker = async () => {
-      while (true) {
-        const idx = nextIndex++;
-        if (idx >= batch.length) break;
+    const update = { id: wooProduct.id };
+    let changed = false;
 
-        const product = batch[idx];
-        const startTime = Date.now();
+    // Asegurar manage_stock activado
+    if (!wooProduct.manage_stock) {
+      update.manage_stock = true;
+      changed = true;
+    }
 
-        try {
-          // Usar la función existente pero sabemos que el producto existe
-          const sku = String(product.cod_item).trim().toLowerCase();
-          const wooProduct = wooSkuMap.get(sku);
+    // stock_quantity e in_stock
+    const wcStock = Number(wooProduct.stock_quantity ?? 0);
+    if (wcStock !== nsStock) {
+      update.stock_quantity = nsStock;
+      changed = true;
+    }
+    const wcInStock = Boolean(wooProduct.in_stock);
+    if (wcInStock !== nsInStock) {
+      update.in_stock = nsInStock;
+      changed = true;
+    }
 
-          // Preparar datos de actualización
-          const updateData = {
-            manage_stock: true,
-            stock_quantity: product.existencia || 0,
-            in_stock: (product.existencia || 0) > 0,
-          };
+    // Precios: mantener misma semántica previa
+    if (product.precioAnterior && product.precioAnterior > 0) {
+      const wcRegular = Number(wooProduct.regular_price || 0);
+      if (wcRegular !== Number(product.precioAnterior)) {
+        update.regular_price = String(product.precioAnterior);
+        changed = true;
+      }
+    }
+    if (product.precioActual && product.precioActual > 0) {
+      const wcSale = Number(wooProduct.sale_price || 0);
+      if (wcSale !== Number(product.precioActual)) {
+        update.sale_price = String(product.precioActual);
+        changed = true;
+      }
+    }
 
-          if (product.precioAnterior && product.precioAnterior > 0) {
-            updateData.regular_price = String(product.precioAnterior);
-          }
-          if (product.precioActual && product.precioActual > 0) {
-            updateData.sale_price = String(product.precioActual);
-          }
+    if (changed) diffs.push(update);
+  }
 
-          const updated = await updateWooProduct(wooProduct.id, updateData);
-          const result = { 
-            success: true, 
-            message: 'Producto sincronizado exitosamente', 
-            productData: updated 
-          };
-
-          results.push({ product, result });
-          successful++;
-        } catch (error) {
-          const result = {
-            success: false,
-            message: 'Error de conexión durante la sincronización',
-            error: error.message || 'Error desconocido'
-          };
-          
-          results.push({ product, result });
-          failed++;
-        }
-
+  // Enviar diffs por lotes a products/batch
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < diffs.length; i += BATCH_SIZE) {
+    const chunk = diffs.slice(i, i + BATCH_SIZE);
+    try {
+      await makeWooRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
+      for (const u of chunk) {
+        // Buscar el producto original para registrar resultado
+        const prod = productsToSync.find(p => skuToId.get(String(p.cod_item).trim().toLowerCase()) === u.id);
+        results.push({ product: prod, result: { success: true, message: 'Actualizado por lotes (diff)' } });
+        successful++;
         processedCount++;
-
         if (processedCount % 50 === 0 || processedCount === productsToSync.length) {
-          console.log(
-            `Progreso sincronización: ${processedCount}/${productsToSync.length} (${Math.round((processedCount / productsToSync.length) * 100)}%)`
-          );
+          console.log(`Progreso sincronización: ${processedCount}/${productsToSync.length} (${Math.round((processedCount / productsToSync.length) * 100)}%)`);
         }
       }
-    };
+    } catch (error) {
+      console.warn('Error en actualización por lotes:', error?.message || error);
+      for (const u of chunk) {
+        const prod = productsToSync.find(p => skuToId.get(String(p.cod_item).trim().toLowerCase()) === u.id);
+        results.push({ product: prod, result: { success: false, message: 'Error en actualización por lotes', error: error?.message || 'Error' } });
+        failed++;
+        processedCount++;
+        if (processedCount % 50 === 0 || processedCount === productsToSync.length) {
+          console.log(`Progreso sincronización: ${processedCount}/${productsToSync.length} (${Math.round((processedCount / productsToSync.length) * 100)}%)`);
+        }
+      }
+    }
+    if (i + BATCH_SIZE < diffs.length) {
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
+  }
 
-    // Ejecutar workers concurrentes
-    const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, batch.length) }, () => worker());
-    await Promise.all(workers);
-
-    // Pequeña pausa entre lotes
-    if (i + BATCH_SIZE < productsToSync.length) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+  // Marcar como "Sin cambios" los productos que no requirieron actualización
+  const updatedIds = new Set(diffs.map(d => d.id));
+  for (const product of productsToSync) {
+    const id = skuToId.get(String(product.cod_item).trim().toLowerCase());
+    if (id && !updatedIds.has(id)) {
+      results.push({ product, result: { success: true, message: 'Sin cambios' } });
+      successful++;
+      processedCount++;
+      if (processedCount % 50 === 0 || processedCount === productsToSync.length) {
+        console.log(`Progreso sincronización: ${processedCount}/${productsToSync.length} (${Math.round((processedCount / productsToSync.length) * 100)}%)`);
+      }
     }
   }
 
@@ -439,21 +513,21 @@ async function runSync() {
     const candidates = wooAll.filter(p => (p?.sku || '').trim() && !nsSkuSet.has(String(p.sku).trim()));
     let adjusted = 0;
     let adjustErrors = 0;
-    for (let i = 0; i < candidates.length; i++) {
-      const wc = candidates[i];
+    const updates = candidates.map(wc => ({ id: wc.id, manage_stock: true, stock_quantity: 0, in_stock: false, status: 'draft' }));
+    const BATCH_SIZE_ADJ = 100;
+    for (let i = 0; i < updates.length; i += BATCH_SIZE_ADJ) {
+      const chunk = updates.slice(i, i + BATCH_SIZE_ADJ);
       try {
-        await updateWooProduct(wc.id, { manage_stock: true, stock_quantity: 0, in_stock: false, status: 'draft' });
-        adjusted++;
-        if ((i + 1) % 50 === 0) {
-          console.log(`Ajuste progreso: ${i + 1}/${candidates.length}`);
-        }
-        await new Promise((r) => setTimeout(r, 100));
+        await makeWooRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
+        adjusted += chunk.length;
+        console.log(`Ajuste progreso: ${Math.min(i + BATCH_SIZE_ADJ, updates.length)}/${updates.length}`);
       } catch (err) {
-        adjustErrors++;
-        console.warn(`No se pudo ajustar producto WooCommerce id=${wc.id} sku=${wc.sku}:`, err?.message || err);
+        adjustErrors += chunk.length;
+        console.warn('Error en ajuste por lotes:', err?.message || err);
       }
+      await new Promise((r) => setTimeout(r, 120));
     }
-    console.log(`Ajuste de ausentes completado: ${adjusted}/${candidates.length} marcados como borrador con stock 0${adjustErrors ? `, ${adjustErrors} errores` : ''}.`);
+    console.log(`Ajuste de ausentes completado: ${adjusted}/${updates.length} marcados como borrador con stock 0${adjustErrors ? `, ${adjustErrors} errores` : ''}.`);
     const finishTime = Date.now();
     const finishedAt = new Date(finishTime).toISOString();
     const durationMs = finishTime - startTime;

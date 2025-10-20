@@ -333,37 +333,71 @@ class ApiService {
   }
 
   // Funciones de WooCommerce
-  private async makeWooCommerceRequest(endpoint: string, method: 'GET' | 'POST' | 'PUT' = 'GET', data?: Record<string, unknown>) {
+  private async makeWooCommerceRequest(
+    endpoint: string,
+    method: 'GET' | 'POST' | 'PUT' = 'GET',
+    data?: Record<string, unknown>,
+    opts: { retries?: number; retryDelayMs?: number } = {}
+  ) {
     const auth = btoa(`${WOOCOMMERCE_CONFIG.consumerKey}:${WOOCOMMERCE_CONFIG.consumerSecret}`);
     const url = `${WOOCOMMERCE_CONFIG.url}wp-json/${WOOCOMMERCE_CONFIG.version}/${endpoint}`;
-    
-    const options: RequestInit = {
-      method,
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/json',
-      },
-    };
+    const { retries = 3, retryDelayMs = 500 } = opts;
 
-    if (data && (method === 'POST' || method === 'PUT')) {
-      options.body = JSON.stringify(data);
-    }
+    let attempt = 0;
+    while (true) {
+      const options: RequestInit = {
+        method,
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json',
+        },
+      };
 
-    const response = await fetch(url, options);
-    
-    if (!response.ok) {
-      // Intentar extraer detalles de error de WooCommerce
-      try {
-        const errorJson = await response.json();
-        const detail = errorJson?.message || JSON.stringify(errorJson);
-        throw new Error(`WooCommerce API Error: ${response.status} ${response.statusText} - ${detail}`);
-      } catch {
-        const errorText = await response.text();
-        throw new Error(`WooCommerce API Error: ${response.status} ${response.statusText} - ${errorText}`);
+      if (data && (method === 'POST' || method === 'PUT')) {
+        options.body = JSON.stringify(data);
       }
-    }
 
-    return response.json();
+      let response: Response;
+      try {
+        response = await fetch(url, options);
+      } catch (networkErr) {
+        if (attempt < retries) {
+          const delay = retryDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 100);
+          await new Promise((r) => setTimeout(r, delay));
+          attempt++;
+          continue;
+        }
+        throw networkErr;
+      }
+
+      if (response.ok) {
+        try {
+          return await response.json();
+        } catch {
+          return undefined as any;
+        }
+      }
+
+      const status = response.status;
+      const retriable = status === 429 || status === 502 || status === 503 || status === 504;
+      if (!retriable || attempt >= retries) {
+        // Intentar extraer detalles de error de WooCommerce
+        try {
+          const errorJson = await response.json();
+          const detail = (errorJson as any)?.message || JSON.stringify(errorJson);
+          throw new Error(`WooCommerce API Error: ${response.status} ${response.statusText} - ${detail}`);
+        } catch {
+          const errorText = await response.text();
+          throw new Error(`WooCommerce API Error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+      }
+
+      const retryAfter = Number(response.headers.get('Retry-After') || 0);
+      const baseDelay = retryAfter ? retryAfter * 1000 : retryDelayMs * Math.pow(2, attempt);
+      const jitter = Math.floor(Math.random() * 250);
+      await new Promise((r) => setTimeout(r, baseDelay + jitter));
+      attempt++;
+    }
   }
 
   async searchProductBySku(sku: string): Promise<WooCommerceProduct | null> {
@@ -392,7 +426,7 @@ class ApiService {
     try {
       // Paginación hasta que una página devuelva menos de perPage
       while (true) {
-        const products = await this.makeWooCommerceRequest(`products?per_page=${perPage}&page=${page}&status=any`);
+        const products = await this.makeWooCommerceRequest(`products?per_page=${perPage}&page=${page}&status=any&_fields=id,sku,regular_price,sale_price,stock_quantity,manage_stock,in_stock,status`);
         if (Array.isArray(products)) {
           all.push(...products);
           if (products.length < perPage) break;
@@ -704,6 +738,39 @@ class ApiService {
       return updatedProduct;
     } catch (error) {
       console.error('Error actualizando producto:', error);
+      throw error;
+    }
+  }
+
+  async batchUpdateWooProducts(
+    updates: Array<{ id: number } & Partial<WooCommerceProduct>>
+  ): Promise<{ updated: number; failed: number; responses: any[] }> {
+    try {
+      if (!updates || updates.length === 0) {
+        return { updated: 0, failed: 0, responses: [] };
+      }
+      const chunkSize = 100;
+      let updated = 0;
+      let failed = 0;
+      const responses: any[] = [];
+
+      for (let i = 0; i < updates.length; i += chunkSize) {
+        const chunk = updates.slice(i, i + chunkSize);
+        try {
+          const res = await this.makeWooCommerceRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
+          responses.push(res);
+          const count = Array.isArray(res?.update) ? res.update.length : chunk.length;
+          updated += count;
+        } catch (err) {
+          failed += chunk.length;
+          responses.push({ error: err instanceof Error ? err.message : String(err), chunk });
+        }
+        await new Promise(resolve => setTimeout(resolve, 120));
+      }
+
+      return { updated, failed, responses };
+    } catch (error) {
+      console.error('Error en batchUpdateWooProducts:', error);
       throw error;
     }
   }
@@ -1047,14 +1114,68 @@ class ApiService {
       onProgress(0, productsToSync.length, `Sincronizando ${productsToSync.length} productos existentes (${skippedProducts.length} omitidos)...`);
     }
 
-    // Fase 3: Sincronizar solo los productos que existen en WooCommerce
+    // Fase 3: Sincronizar solo los productos que existen en WooCommerce (batch + diff)
     let successful = 0;
     let failed = 0;
     let processedCount = 0;
 
-    // Procesar en lotes para mejor rendimiento
-    const BATCH_SIZE = 100;
-    const CONCURRENCY_LIMIT = 50;
+    // Construir diffs mínimos por producto
+    const diffs: Array<{ id: number } & Partial<WooCommerceProduct>> = [];
+    const idBySku = new Map<string, number>();
+    productsToSync.forEach(p => {
+      const skuKey = p.cod_item!.trim().toLowerCase();
+      const w = wooSkuMap.get(skuKey)!;
+      idBySku.set(skuKey, w.id);
+
+      const nsStock = Number(p.existencia || 0);
+      const inStock = nsStock > 0;
+
+      const nsAnterior = Number(p.precioAnterior || 0);
+      const nsActual = Number(p.precioActual || 0);
+      let expectedRegular = 0;
+      let expectedSale: number | undefined = undefined;
+      const hasAnterior = nsAnterior > 0;
+      const hasActual = nsActual > 0;
+      if (hasAnterior && hasActual) {
+        expectedRegular = nsAnterior;
+        if (nsActual < nsAnterior) expectedSale = nsActual;
+      } else if (hasActual) {
+        expectedRegular = nsActual;
+      } else if (hasAnterior) {
+        expectedRegular = nsAnterior;
+      }
+
+      const upd: Partial<WooCommerceProduct> & { id: number } = { id: w.id };
+      let changed = false;
+
+      if (!w.manage_stock) { upd.manage_stock = true; changed = true; }
+      const wcStock = Number(w.stock_quantity ?? 0);
+      if (wcStock !== nsStock) { upd.stock_quantity = nsStock; changed = true; }
+      const wcInStock = !!w.in_stock;
+      if (wcInStock !== inStock) { upd.in_stock = inStock; changed = true; }
+
+      const wcRegular = Number(w.regular_price || 0);
+      if (expectedRegular > 0 && wcRegular !== expectedRegular) {
+        upd.regular_price = String(expectedRegular);
+        changed = true;
+      }
+
+      const wcSaleRaw = (w.sale_price ?? '').toString();
+      const wcSalePresent = wcSaleRaw.trim() !== '';
+      const wcSale = wcSalePresent ? Number(wcSaleRaw) : undefined;
+
+      if (expectedSale === undefined) {
+        if (wcSalePresent) { (upd as any).sale_price = ''; changed = true; }
+      } else {
+        if (!wcSalePresent || wcSale !== expectedSale) {
+          (upd as any).sale_price = String(expectedSale);
+          changed = true;
+        }
+      }
+
+      if (changed) diffs.push(upd);
+    });
+
     const finalResults: Array<{ 
       product: string; 
       success: boolean; 
@@ -1063,105 +1184,67 @@ class ApiService {
       productData?: Product;
     }> = [];
 
-    for (let i = 0; i < productsToSync.length; i += BATCH_SIZE) {
-      const batch = productsToSync.slice(i, i + BATCH_SIZE);
-      let nextIndex = 0;
-      const batchResults: Array<{
-        product: string;
-        success: boolean;
-        message: string;
-        responseTime?: number;
-      }> = [];
-
-      const worker = async () => {
-        while (true) {
-          const idx = nextIndex++;
-          if (idx >= batch.length) break;
-
-          const product = batch[idx];
-          const startTime = Date.now();
-          let result: SyncResult;
-
-          try {
-            // Usar la función existente pero sabemos que el producto existe
-            const sku = product.cod_item!.trim().toLowerCase();
-            const wooProduct = wooSkuMap.get(sku)!;
-
-            // Preparar datos de actualización
-            const updateData: Partial<WooCommerceProduct> = {
-              manage_stock: true,
-              stock_quantity: product.existencia || 0,
-              in_stock: (product.existencia || 0) > 0
-            };
-
-            // Actualizar precios si están disponibles
-            if (product.precioAnterior && product.precioAnterior > 0) {
-              updateData.regular_price = product.precioAnterior.toString();
-            }
-            
-            if (product.precioActual && product.precioActual > 0) {
-              updateData.sale_price = product.precioActual.toString();
-            }
-
-            // Actualizar producto en WooCommerce
-            const updatedProduct = await this.updateWooCommerceProduct(wooProduct.id, updateData);
-
-            result = {
-              success: true,
-              message: 'Producto sincronizado exitosamente (optimizado)',
-              productData: updatedProduct
-            };
-          } catch (error) {
-            result = {
-              success: false,
-              message: 'Error durante la sincronización optimizada',
-              error: error instanceof Error ? error.message : 'Error desconocido'
-            };
-          }
-
-          const responseTime = Date.now() - startTime;
-          const syncResult = {
-            product: product.cod_item || 'Sin código',
-            success: result.success,
-            message: result.success ? result.message : (result.error || result.message),
-            productId: result.productData?.id,
-            productData: product
-          };
-
-          results.push({ product, result });
-          finalResults.push(syncResult);
-          batchResults.push({
-            product: syncResult.product,
-            success: syncResult.success,
-            message: syncResult.message,
-            responseTime
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < diffs.length; i += BATCH_SIZE) {
+      const chunk = diffs.slice(i, i + BATCH_SIZE);
+      try {
+        await this.makeWooCommerceRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
+        for (const u of chunk) {
+          const sku = Array.from(idBySku.keys()).find(k => idBySku.get(k) === u.id) || '';
+          const p = productsToSync.find(pp => pp.cod_item!.trim().toLowerCase() === sku)!;
+          finalResults.push({
+            product: p.cod_item || 'Sin código',
+            success: true,
+            message: 'Actualizado por lotes (diff)',
+            productId: u.id,
+            productData: p
           });
+          successful++;
           processedCount++;
-
-          if (result.success) {
-            successful++;
-          } else {
-            failed++;
-          }
-
           if (callbacks?.onProgress) {
-            onProgress(processedCount, productsToSync.length, `Sincronizando productos existentes... (${processedCount}/${productsToSync.length})`);
+            onProgress(processedCount, productsToSync.length, `Actualizando por lotes... (${processedCount}/${productsToSync.length})`);
           }
         }
-      };
-
-      // Ejecutar workers concurrentes
-      const workers = Array.from({ length: Math.min(CONCURRENCY_LIMIT, batch.length) }, () => worker());
-      await Promise.all(workers);
-
-      // Llamar callback de lote completado
-      if (callbacks?.onBatchComplete && batchResults.length > 0) {
-        onBatchComplete(batchResults);
+      } catch (err) {
+        for (const u of chunk) {
+          const sku = Array.from(idBySku.keys()).find(k => idBySku.get(k) === u.id) || '';
+          const p = productsToSync.find(pp => pp.cod_item!.trim().toLowerCase() === sku)!;
+          finalResults.push({
+            product: p.cod_item || 'Sin código',
+            success: false,
+            message: err instanceof Error ? err.message : 'Error en actualización por lotes',
+            productId: u.id,
+            productData: p
+          });
+          failed++;
+          processedCount++;
+          if (callbacks?.onProgress) {
+            onProgress(processedCount, productsToSync.length, `Actualizando por lotes... (${processedCount}/${productsToSync.length})`);
+          }
+        }
       }
 
-      // Pequeña pausa entre lotes
-      if (i + BATCH_SIZE < productsToSync.length) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+      if (i + BATCH_SIZE < diffs.length) {
+        await new Promise(resolve => setTimeout(resolve, 120));
+      }
+    }
+
+    // Marcar productos sin cambios como omitidos (sin petición)
+    const updatedIds = new Set(diffs.map(d => d.id));
+    for (const p of productsToSync) {
+      const id = idBySku.get(p.cod_item!.trim().toLowerCase())!;
+      if (!updatedIds.has(id)) {
+        finalResults.push({
+          product: p.cod_item || 'Sin código',
+          success: true,
+          message: 'Sin cambios',
+          productId: id,
+          productData: p
+        });
+        processedCount++;
+        if (callbacks?.onProgress) {
+          onProgress(processedCount, productsToSync.length, `Sin cambios... (${processedCount}/${productsToSync.length})`);
+        }
       }
     }
 
