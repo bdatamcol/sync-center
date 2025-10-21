@@ -37,9 +37,18 @@ export default function AdminLayout({
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isClient, setIsClient] = useState(false);
   const router = useRouter();
 
+  // Primer useEffect: Marcar que estamos en el cliente
   useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  // Segundo useEffect: Verificar autenticación solo cuando estamos en el cliente
+  useEffect(() => {
+    if (!isClient) return;
+
     // Verificar autenticación con el apiService
     const checkAuth = () => {
       const authStatus = localStorage.getItem("isAuthenticated");
@@ -49,22 +58,26 @@ export default function AdminLayout({
         setIsAuthenticated(true);
       } else {
         // Limpiar datos de autenticación si están inconsistentes
-        localStorage.removeItem("isAuthenticated");
-        localStorage.removeItem("user");
-        localStorage.removeItem("api_token");
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem("isAuthenticated");
+          localStorage.removeItem("user");
+          localStorage.removeItem("token");
+        }
         router.push("/");
       }
       setIsLoading(false);
     };
 
     checkAuth();
-  }, [router]);
+  }, [router, isClient]);
 
   const handleLogout = () => {
     // Limpiar todos los datos de autenticación
-    localStorage.removeItem("isAuthenticated");
-    localStorage.removeItem("user");
-    localStorage.removeItem("api_token");
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem("isAuthenticated");
+      localStorage.removeItem("user");
+      localStorage.removeItem("token");
+    }
     
     // Limpiar también el token del apiService
     apiService.logout();
@@ -73,7 +86,7 @@ export default function AdminLayout({
     router.push("/");
   };
 
-  if (isLoading) {
+  if (!isClient || isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-lg">Cargando...</div>
