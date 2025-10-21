@@ -208,7 +208,7 @@ export default function InventoryPage() {
             {searchTerm && (
               <Badge variant="secondary" className="flex items-center gap-1">
                 <Search className="w-3 h-3" />
-                "{searchTerm}"
+                &quot;{searchTerm}&quot;
                 <button 
                   onClick={() => setSearchTerm('')}
                   className="ml-1 hover:text-red-600"
