@@ -43,9 +43,9 @@ const WOOCOMMERCE_CONFIG = {
 };
 
 // Novasoft API endpoints (can be overridden via environment variables)
-const NS_AUTH_URL = process.env.NS_AUTH_URL || 'http://192.168.1.32:3000/api/auth';
-const NS_PRODUCTS_URL = process.env.NS_PRODUCTS_URL || 'http://192.168.1.32:3000/api/productos/novasoft';
-const NS_PRICES_URL = process.env.NS_PRICES_URL || 'http://192.168.1.32:3000/api/con-precios';
+const NS_AUTH_URL = process.env.NS_AUTH_URL || 'http://190.85.4.139:3000/api/auth';
+const NS_PRODUCTS_URL = process.env.NS_PRODUCTS_URL || 'http://190.85.4.139:3000/api/productos/novasoft';
+const NS_PRICES_URL = process.env.NS_PRICES_URL || 'http://190.85.4.139:3000/api/con-precios';
 
 function base64Auth(key, secret) {
   return Buffer.from(`${key}:${secret}`).toString('base64');
