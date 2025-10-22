@@ -21,6 +21,11 @@ export interface LoginCredentials {
 export interface LoginResponse {
   success: boolean;
   token?: string;
+  expiresIn?: string;
+  user?: {
+    username: string;
+    role: string;
+  };
   message?: string;
   error?: string;
 }
@@ -113,7 +118,7 @@ class ApiService {
   constructor() {
     // Recuperar token del localStorage si existe
     if (typeof window !== 'undefined') {
-      this.token = localStorage.getItem('api_token');
+      this.token = localStorage.getItem('token');
     }
   }
 
@@ -127,7 +132,7 @@ class ApiService {
     const localToken = `local:${username}`;
     this.token = localToken;
     if (typeof window !== 'undefined') {
-      localStorage.setItem('api_token', localToken);
+      localStorage.setItem('token', localToken);
     }
   }
 
@@ -165,11 +170,13 @@ class ApiService {
       if (data.token) {
         this.token = data.token;
         if (typeof window !== 'undefined') {
-          localStorage.setItem('api_token', data.token);
+          localStorage.setItem('token', data.token);
         }
         return {
           success: true,
           token: data.token,
+          expiresIn: data.expiresIn,
+          user: data.user,
           message: data.message || 'Autenticación exitosa'
         };
       } else {
@@ -324,7 +331,7 @@ class ApiService {
   logout() {
     this.token = null;
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('api_token');
+      localStorage.removeItem('token');
     }
   }
 

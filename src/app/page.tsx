@@ -46,10 +46,15 @@ export default function LoginPage() {
       if (response.success) {
         // Autenticación exitosa con API
         localStorage.setItem("isAuthenticated", "true");
-        localStorage.setItem("user", JSON.stringify({ username: data.username }));
+        localStorage.setItem("user", JSON.stringify(response.user || { username: data.username }));
         
-        // Redireccionar al panel de administración
-        router.push("/admin");
+        // Redireccionar según el rol del usuario
+        if (response.user?.role === "user") {
+          // Usar replace para evitar problemas de navegación
+          router.push("/dashboard");
+        } else {
+          router.push("/admin");
+        }
       } else {
         // Fallback a credenciales locales si la API falla
         if (data.username === "admin" && data.password === "1q2w3e4r") {
@@ -125,15 +130,6 @@ export default function LoginPage() {
               </Button>
             </form>
           </Form>
-          <div className="mt-4 text-xs text-gray-500 text-center">
-            <p>Credenciales API:</p>
-            <p>Usuario: <strong>admin</strong></p>
-            <p>Contraseña: <strong>Bdatam2025!</strong></p>
-            <hr className="my-2" />
-            <p>Credenciales locales (fallback):</p>
-            <p>Usuario: <strong>admin</strong></p>
-            <p>Contraseña: <strong>1q2w3e4r</strong></p>
-          </div>
         </CardContent>
       </Card>
     </div>
