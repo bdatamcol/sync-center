@@ -57,7 +57,7 @@ export interface InventoryResponse {
 }
 
 class InventoryService {
-  private baseUrl = 'http://localhost:3000/api/inventario';
+  private baseUrl = process.env.NEXT_PUBLIC_API_URL_BDATAM + '/inventario';
   private filtersCacheKey = 'inventory_filters_cache_v1';
   private filtersCacheTTLMs = 24 * 60 * 60 * 1000; // 24h
 
@@ -125,8 +125,7 @@ class InventoryService {
       },
       error: token ? undefined : 'Token de autenticación requerido'
     };
-
-    if (!token) return emptyResponse;
+    // if (!token) return emptyResponse;
 
     const url = this.buildUrl(safeFilters);
 
