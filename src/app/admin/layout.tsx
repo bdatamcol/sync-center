@@ -6,6 +6,7 @@ import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGrou
 import { Home, Package, LogOut, History, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiService } from "@/lib/api";
+import Image from "next/image";
 
 const menuItems = [
   {
@@ -104,8 +105,14 @@ export default function AdminLayout({
         <Sidebar>
           <SidebarContent>
             <SidebarGroup>
-              <SidebarGroupLabel className="text-lg font-semibold mb-4">
-                Panel de Administración
+              <SidebarGroupLabel className="mb-4 flex justify-center">
+                <Image
+                  src="/syn-2.png"
+                  alt="Sync Center"
+                  width={140}
+                  height={40}
+                  className="h-auto w-auto"
+                />
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
