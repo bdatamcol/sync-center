@@ -138,7 +138,7 @@ export default function EscritorioPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-gradient-to-r from-primary/10 via-secondary/10 to-primary/5 p-6 rounded-xl border border-primary/20">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r  bg-clip-text text-black">
             Escritorio
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Panel principal de administración</p>
@@ -168,54 +168,54 @@ export default function EscritorioPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Card className="border-blue-200 shadow-md hover:shadow-lg transition-shadow duration-300 bg-gradient-to-br from-blue-50 to-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle className="text-sm font-medium text-gray-700">Total de Productos</CardTitle>
-              <div className="bg-blue-100 p-2 rounded-lg">
-                <Package className="h-5 w-5 text-primary" />
+              <div className="bg-blue-100  rounded-lg">
+                <Package className=" w-5 text-primary" />
               </div>
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold text-primary">{formatNumber(stats.totalProducts)}</div>
-              <p className="text-xs text-gray-600 mt-1">Productos registrados en el sistema</p>
+              <p className="text-xs text-gray-600">Productos registrados en el sistema</p>
             </CardContent>
           </Card>
 
           <Card className="border-green-200 shadow-md hover:shadow-lg transition-shadow duration-300 bg-gradient-to-br from-green-50 to-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle className="text-sm font-medium text-gray-700">Stock Total</CardTitle>
-              <div className="bg-green-100 p-2 rounded-lg">
-                <TrendingUp className="h-5 w-5 text-green-600" />
+              <div className="bg-green-100 rounded-lg">
+                <TrendingUp className=" w-5 text-green-600" />
               </div>
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold text-green-600">{formatNumber(stats.totalStock)}</div>
-              <p className="text-xs text-gray-600 mt-1">Unidades totales en inventario</p>
+              <p className="text-xs text-gray-600">Unidades totales en inventario</p>
             </CardContent>
           </Card>
 
           <Card className="border-orange-200 shadow-md hover:shadow-lg transition-shadow duration-300 bg-gradient-to-br from-orange-50 to-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-">
               <CardTitle className="text-sm font-medium text-gray-700">Stock Bajo</CardTitle>
-              <div className="bg-orange-100 p-2 rounded-lg">
-                <AlertTriangle className="h-5 w-5 text-orange-600" />
+              <div className="bg-orange-100 rounded-lg">
+                <AlertTriangle className=" w-5 text-orange-600" />
               </div>
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold text-orange-600">{formatNumber(stats.lowStockProducts)}</div>
-              <p className="text-xs text-gray-600 mt-1">Productos con menos de 10 unidades</p>
+              <p className="text-xs text-gray-600">Productos con menos de 10 unidades</p>
             </CardContent>
           </Card>
 
           <Card className="border-yellow-200 shadow-md hover:shadow-lg transition-shadow duration-300 bg-gradient-to-br from-yellow-50 to-white">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle className="text-sm font-medium text-gray-700">Valor del Inventario</CardTitle>
-              <div className="bg-yellow-100 p-2 rounded-lg">
-                <DollarSign className="h-5 w-5 text-yellow-600" />
+              <div className="bg-yellow-100 rounded-lg">
+                <DollarSign className=" w-5 text-yellow-600" />
               </div>
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold text-yellow-600">{formatCurrency(stats.totalInventoryValue)}</div>
-              <p className="text-xs text-gray-600 mt-1">Valor total del inventario</p>
+              <p className="text-xs text-gray-600 ">Valor total del inventario</p>
             </CardContent>
           </Card>
         </div>

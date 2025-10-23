@@ -957,7 +957,7 @@ export default function ProductosPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-gradient-to-r from-primary/10 via-secondary/10 to-primary/5 p-6 rounded-xl border border-primary/20">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r  bg-clip-text text-black">
             Productos en Novasoft
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Gestiona y sincroniza tu inventario</p>
@@ -1050,8 +1050,8 @@ export default function ProductosPage() {
         </div>
       </div>
 
-      <Card className="border-border/50 shadow-lg bg-card/80 backdrop-blur-sm">
-        <CardHeader className="border-b border-border/50 bg-gradient-to-r from-primary/5 to-secondary/5">
+      <Card className="border-border/50 shadow-lg bg-card/80 backdrop-blur-sm p-0">
+        <CardHeader className="border-b border-border/50 bg-gradient-to-r from-primary/5 to-secondary/5 py-6">
           <CardTitle className="text-xl">Lista de Productos</CardTitle>
           <CardDescription className="flex items-center gap-2">
             <span className="font-medium text-foreground">{filteredProducts.length}</span> de{" "}
@@ -1077,7 +1077,7 @@ export default function ProductosPage() {
             )}
           </CardDescription>
         </CardHeader>
-        <CardContent className="pt-6">
+        <CardContent className="pt-1">
           <div className="mb-6 relative">
             <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-muted-foreground h-5 w-5" />
             <Input

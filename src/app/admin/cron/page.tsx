@@ -151,7 +151,7 @@ export default function CronHistoryPage() {
       <div className="mx-auto space-y-6">
         <div className="flex justify-between items-center bg-gradient-to-r from-primary/10 via-secondary/10 to-primary/5 p-6 rounded-xl border border-primary/20">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r text-black bg-clip-text">
               Historial de Ejecuciones CRON
             </h1>
             <p className="text-sm text-muted-foreground mt-1">Monitorea y analiza las ejecuciones automáticas de sincronización</p>
@@ -307,7 +307,6 @@ export default function CronHistoryPage() {
                   <tr key={e.id} className="hover:bg-blue-50/50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="font-medium text-gray-900">{new Date(e.startedAt).toLocaleString("es-ES")}</div>
-                      {e.message && <div className="text-gray-600 text-sm mt-1">{e.message}</div>}
                     </td>
                     <td className="px-6 py-4 text-gray-700 font-medium">{formatDuration(e.durationMs)}</td>
                     <td className="px-6 py-4 text-gray-700">{e.total ?? "-"}</td>

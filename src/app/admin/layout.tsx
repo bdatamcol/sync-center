@@ -13,8 +13,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarProvider,
-  SidebarTrigger,
+  SidebarProvider
 } from "@/components/ui/sidebar"
 import { Home, Package, LogOut, History, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -146,9 +145,9 @@ export default function AdminLayout({
             </div>
           </SidebarContent>
         </Sidebar>
-        <main className="flex-1 p-8">
+        <main className="flex-1 px-6 py-2">
           <div className="mb-6">
-            <SidebarTrigger className="hover:bg-primary/10 hover:text-primary transition-colors" />
+            {/* SidebarTrigger eliminado para evitar ocultación */}
           </div>
           {children}
         </main>
