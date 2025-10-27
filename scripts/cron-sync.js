@@ -122,7 +122,7 @@ async function getAllWooProducts() {
   const all = [];
   try {
     while (true) {
-      const products = await makeWooRequest(`products?per_page=${perPage}&page=${page}&status=any&_fields=id,sku,regular_price,sale_price,stock_quantity,manage_stock,in_stock,status`);
+      const products = await makeWooRequest(`products?per_page=${perPage}&page=${page}&status=any&_fields=id,sku,regular_price,sale_price,stock_quantity,manage_stock,in_stock,status,images`);
       if (Array.isArray(products)) {
         all.push(...products);
         if (products.length < perPage) break;
@@ -275,7 +275,13 @@ async function syncAllProductsOptimized(products) {
     if (wooProduct) {
       const nsStock = normalizeStock(product.existencia);
       const currentStatus = wooProduct.status || PRODUCT_STATUS.DRAFT;
-      const newStatus = determineProductStatus(nsStock);
+      // Determinar nuevo estado por stock
+      let newStatus = determineProductStatus(nsStock);
+      // Forzar DRAFT si no tiene imagen (regla adicional)
+      const hasImage = Array.isArray(wooProduct.images) && wooProduct.images.length > 0;
+      if (!hasImage) {
+        newStatus = PRODUCT_STATUS.DRAFT;
+      }
       
       const update = {
         id: wooProduct.id,
@@ -292,7 +298,7 @@ async function syncAllProductsOptimized(products) {
         update.sale_price = String(product.precioActual);
       }
 
-      // Actualizar estado según las reglas
+      // Actualizar estado según las reglas (solo público si tiene imagen y cumple umbral)
       if (currentStatus !== newStatus) {
         update.status = newStatus;
       }
