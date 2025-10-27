@@ -173,13 +173,6 @@ async function getAllWooProducts() {
   return all;
 }
 
-// Verificación segura de stock: convierte a número, evita NaN/inf, limita a enteros >= 0
-function normalizeStock(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || Number.isNaN(n)) return 0;
-  return n < 0 ? 0 : Math.floor(n);
-}
-
 async function syncProduct(product) {
   try {
     const sku = product.cod_item;
@@ -535,33 +528,6 @@ async function runSync() {
       await new Promise((r) => setTimeout(r, 120));
     }
     console.log(`Ajuste de ausentes completado: ${adjusted}/${updates.length} marcados como borrador con stock 0${adjustErrors ? `, ${adjustErrors} errores` : ''}.`);
-
-    // Paso adicional: productos con stock <= 3 -> estado "draft" sin alterar stock/precios
-    console.log('Ajustando productos con stock bajo (<= 3) a estado "draft"...');
-    const LOW_STOCK_THRESHOLD = Number(process.env.LOW_STOCK_THRESHOLD || 3);
-    const lowStockCandidates = wooAll.filter(wc => {
-      const sku = (wc?.sku || '').trim();
-      if (!sku) return false;
-      const qty = normalizeStock(wc?.stock_quantity);
-      return qty <= LOW_STOCK_THRESHOLD && wc.status !== 'draft';
-    });
-    let lowAdjusted = 0;
-    let lowAdjustErrors = 0;
-    const lowUpdates = lowStockCandidates.map(wc => ({ id: wc.id, status: 'draft' }));
-    for (let i = 0; i < lowUpdates.length; i += BATCH_SIZE_ADJ) {
-      const chunk = lowUpdates.slice(i, i + BATCH_SIZE_ADJ);
-      try {
-        await makeWooRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
-        lowAdjusted += chunk.length;
-        console.log(`Bajo stock progreso: ${Math.min(i + BATCH_SIZE_ADJ, lowUpdates.length)}/${lowUpdates.length}`);
-      } catch (err) {
-        lowAdjustErrors += chunk.length;
-        console.warn('Error en ajuste de bajo stock por lotes:', err?.message || err);
-      }
-      await new Promise((r) => setTimeout(r, 120));
-    }
-    console.log(`Ajuste de bajo stock completado: ${lowAdjusted}/${lowUpdates.length} marcados como borrador${lowAdjustErrors ? `, ${lowAdjustErrors} errores` : ''}.`);
-
     const finishTime = Date.now();
     const finishedAt = new Date(finishTime).toISOString();
     const durationMs = finishTime - startTime;
@@ -590,17 +556,6 @@ async function runSync() {
       success: adjustErrors === 0,
       message: `Ajuste: ${adjusted}/${candidates.length} marcados como borrador y stock 0`,
       error: adjustErrors ? `${adjustErrors} errores durante el ajuste` : null,
-    });
-    // Añadir resumen de bajo stock
-    detailsArray.push({
-      sku: 'BAJO_STOCK',
-      name: 'Productos con stock <= umbral',
-      existencia: LOW_STOCK_THRESHOLD,
-      precioAnterior: 0,
-      precioActual: 0,
-      success: lowAdjustErrors === 0,
-      message: `Ajuste: ${lowAdjusted}/${lowStockCandidates.length} marcados como borrador (umbral ${LOW_STOCK_THRESHOLD})`,
-      error: lowAdjustErrors ? `${lowAdjustErrors} errores durante el ajuste de bajo stock` : null,
     });
     const detailsJson = JSON.stringify(detailsArray);
     try {
