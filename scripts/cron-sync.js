@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
+const mysql = require('mysql2/promise');
 
 // Cargar variables desde .env si existe
 function loadDotEnv() {
@@ -38,104 +39,270 @@ const PRODUCT_STATUS = {
   PUBLISH: 'publish'
 };
 
-// WooCommerce API configuration (can be overridden via environment variables)
-const WOOCOMMERCE_CONFIG = {
-  url: process.env.WC_URL || process.env.NEXT_PUBLIC_WC_URL || 'https://towncenter.co/',
-  key: process.env.WC_KEY || process.env.WC_CONSUMER_KEY || process.env.NEXT_PUBLIC_WC_CONSUMER_KEY,
-  secret: process.env.WC_SECRET || process.env.WC_CONSUMER_SECRET || process.env.NEXT_PUBLIC_WC_CONSUMER_SECRET,
-  version: process.env.WC_VERSION || process.env.NEXT_PUBLIC_WC_VERSION || 'wc/v3'
+// WooCommerce DB configuration (direct MySQL access)
+const MYSQL_CONFIG = {
+  host: process.env.WC_DB_HOST,
+  port: Number(process.env.WC_DB_PORT || 3306),
+  user: process.env.WC_DB_USER,
+  password: process.env.WC_DB_PASSWORD,
+  database: process.env.WC_DB_NAME,
 };
+const TABLE_PREFIX = process.env.WC_TABLE_PREFIX || 'wp_';
+let mysqlPool;
+function getMysqlPool() {
+  if (!mysqlPool) {
+    if (!MYSQL_CONFIG.host || !MYSQL_CONFIG.user || !MYSQL_CONFIG.password || !MYSQL_CONFIG.database) {
+      throw new Error('Config MySQL incompleta: WC_DB_HOST, WC_DB_USER, WC_DB_PASSWORD, WC_DB_NAME son requeridas');
+    }
+    mysqlPool = mysql.createPool({
+      ...MYSQL_CONFIG,
+      waitForConnections: true,
+      connectionLimit: Number(process.env.CRON_DB_POOL_SIZE || 50),
+      queueLimit: 0,
+    });
+  }
+  return mysqlPool;
+}
+
+// Verificación/creación de índices críticos para acelerar joins y filtros
+async function ensureIndexes() {
+  const pool = getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    const dbName = MYSQL_CONFIG.database;
+    async function indexExists(table, index) {
+      const [rows] = await conn.query(
+        `SELECT 1 FROM information_schema.statistics WHERE table_schema=? AND table_name=? AND index_name=? LIMIT 1`,
+        [dbName, `${TABLE_PREFIX}${table}`, index]
+      );
+      return Array.isArray(rows) && rows.length > 0;
+    }
+
+    if (!(await indexExists('postmeta', 'post_id_meta_key'))) {
+      await conn.execute(`ALTER TABLE \`${TABLE_PREFIX}postmeta\` ADD INDEX post_id_meta_key (post_id, meta_key)`);
+      console.log('Índice post_id_meta_key creado en postmeta');
+    }
+    if (!(await indexExists('postmeta', 'meta_key'))) {
+      await conn.execute(`ALTER TABLE \`${TABLE_PREFIX}postmeta\` ADD INDEX meta_key (meta_key)`);
+      console.log('Índice meta_key creado en postmeta');
+    }
+    if (!(await indexExists('wc_product_meta_lookup', 'idx_product_id'))) {
+      await conn.execute(`ALTER TABLE \`${TABLE_PREFIX}wc_product_meta_lookup\` ADD INDEX idx_product_id (product_id)`);
+      console.log('Índice idx_product_id creado en wc_product_meta_lookup');
+    }
+    if (!(await indexExists('posts', 'post_type_id'))) {
+      await conn.execute(`ALTER TABLE \`${TABLE_PREFIX}posts\` ADD INDEX post_type_id (post_type, ID)`);
+      console.log('Índice post_type_id creado en posts');
+    }
+  } finally {
+    conn.release();
+  }
+}
 
 // Novasoft API endpoints (can be overridden via environment variables)
 const NS_AUTH_URL = process.env.NS_AUTH_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://190.85.4.139:3000/api/auth';
 const NS_PRODUCTS_URL = process.env.NS_PRODUCTS_URL || process.env.NEXT_PUBLIC_NS_PRODUCTS_URL || 'http://190.85.4.139:3000/api/productos/novasoft';
 const NS_PRICES_URL = process.env.NS_PRICES_URL || process.env.NEXT_PUBLIC_NS_PRICES_URL || 'http://190.85.4.139:3000/api/con-precios';
 
-function base64Auth(key, secret) {
-  return Buffer.from(`${key}:${secret}`).toString('base64');
-}
-
-async function makeWooRequest(endpoint, method = 'GET', data, opts = {}) {
-  const url = `${WOOCOMMERCE_CONFIG.url}wp-json/${WOOCOMMERCE_CONFIG.version}/${endpoint}`;
-  const auth = base64Auth(WOOCOMMERCE_CONFIG.key, WOOCOMMERCE_CONFIG.secret);
-  const { retries = 3, retryDelayMs = 500 } = opts;
-
-  let attempt = 0;
-  while (true) {
-    const options = {
-      method,
-      headers: {
-        'Authorization': `Basic ${auth}`,
-        'Content-Type': 'application/json',
-      },
-    };
-
-    if (data && (method === 'POST' || method === 'PUT')) {
-      options.body = JSON.stringify(data);
-    }
-
-    let res;
-    try {
-      res = await fetch(url, options);
-    } catch (networkErr) {
-      if (attempt < retries) {
-        const delay = retryDelayMs * Math.pow(2, attempt) + Math.floor(Math.random() * 100);
-        await new Promise((r) => setTimeout(r, delay));
-        attempt++;
-        continue;
-      }
-      throw networkErr;
-    }
-
-    if (res.ok) {
-      try {
-        return await res.json();
-      } catch {
-        return undefined;
-      }
-    }
-
-    const status = res.status;
-    const retriable = status === 429 || status === 502 || status === 503 || status === 504;
-    if (!retriable || attempt >= retries) {
-      let detail;
-      try {
-        const j = await res.json();
-        detail = j?.message || JSON.stringify(j);
-      } catch {
-        detail = await res.text();
-      }
-      throw new Error(`WooCommerce API Error: ${res.status} ${res.statusText} - ${detail}`);
-    }
-
-    const retryAfter = Number(res.headers.get('Retry-After') || 0);
-    const baseDelay = retryAfter ? retryAfter * 1000 : retryDelayMs * Math.pow(2, attempt);
-    const jitter = Math.floor(Math.random() * 250);
-    await new Promise((r) => setTimeout(r, baseDelay + jitter));
-    attempt++;
+// Utilidades de metadatos en WordPress (wp_postmeta)
+async function upsertMeta(conn, postId, key, value) {
+  const [rows] = await conn.execute(
+    `SELECT meta_id FROM \`${TABLE_PREFIX}postmeta\` WHERE post_id = ? AND meta_key = ? LIMIT 1`,
+    [postId, key]
+  );
+  if (Array.isArray(rows) && rows.length > 0) {
+    const metaId = rows[0].meta_id;
+    await conn.execute(
+      `UPDATE \`${TABLE_PREFIX}postmeta\` SET meta_value = ? WHERE meta_id = ?`,
+      [value, metaId]
+    );
+  } else {
+    await conn.execute(
+      `INSERT INTO \`${TABLE_PREFIX}postmeta\` (post_id, meta_key, meta_value) VALUES (?, ?, ?)`,
+      [postId, key, value]
+    );
   }
 }
 
-async function getAllWooProducts() {
-  const perPage = 100;
-  let page = 1;
-  const all = [];
+async function getAllWpProductsFromDb() {
+  const pool = getMysqlPool();
+  const conn = await pool.getConnection();
   try {
-    while (true) {
-      const products = await makeWooRequest(`products?per_page=${perPage}&page=${page}&status=any&_fields=id,sku,regular_price,sale_price,stock_quantity,manage_stock,in_stock,status,images`);
-      if (Array.isArray(products)) {
-        all.push(...products);
-        if (products.length < perPage) break;
-        page += 1;
-        await new Promise((r) => setTimeout(r, 50));
-      } else {
+    const sql = `
+      SELECT 
+        p.ID AS id,
+        p.post_status AS status,
+        sku.meta_value AS sku,
+        manage.meta_value AS manage_stock,
+        stock.meta_value AS stock,
+        stock_status.meta_value AS stock_status,
+        regular.meta_value AS regular_price,
+        sale.meta_value AS sale_price,
+        price.meta_value AS price,
+        thumb.meta_value AS thumbnail_id,
+        lookup.stock_quantity AS lookup_stock_quantity,
+        lookup.stock_status AS lookup_stock_status,
+        lookup.min_price AS lookup_min_price,
+        lookup.max_price AS lookup_max_price,
+        lookup.onsale AS lookup_onsale
+      FROM \`${TABLE_PREFIX}posts\` p
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` sku ON sku.post_id = p.ID AND sku.meta_key = '_sku'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` manage ON manage.post_id = p.ID AND manage.meta_key = '_manage_stock'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` stock ON stock.post_id = p.ID AND stock.meta_key = '_stock'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` stock_status ON stock_status.post_id = p.ID AND stock_status.meta_key = '_stock_status'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` regular ON regular.post_id = p.ID AND regular.meta_key = '_regular_price'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` sale ON sale.post_id = p.ID AND sale.meta_key = '_sale_price'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` price ON price.post_id = p.ID AND price.meta_key = '_price'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` thumb ON thumb.post_id = p.ID AND thumb.meta_key = '_thumbnail_id'
+      LEFT JOIN \`${TABLE_PREFIX}wc_product_meta_lookup\` lookup ON lookup.product_id = p.ID
+      WHERE p.post_type = 'product'
+    `;
+    const [rows] = await conn.query(sql);
+    return rows.map(r => ({
+      id: r.id,
+      status: r.status,
+      sku: r.sku ? String(r.sku).trim() : null,
+      manage_stock: r.manage_stock,
+      stock_quantity: r.stock ? Number(r.stock) : (r.lookup_stock_quantity ?? 0),
+      stock_status: r.stock_status || r.lookup_stock_status,
+      regular_price: r.regular_price,
+      sale_price: r.sale_price,
+      price: r.price,
+      has_image: !!r.thumbnail_id,
+    })).filter(p => p.sku);
+  } finally {
+    conn.release();
+  }
+}
+
+async function applyBatchUpdatesTransactional(updates) {
+  if (!updates || updates.length === 0) return { updated: 0, failed: 0 };
+  const pool = getMysqlPool();
+  const attemptMax = 3;
+  let updated = 0;
+  let failed = 0;
+
+  for (let attempt = 1; attempt <= attemptMax; attempt++) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      for (const upd of updates) {
+        const productId = upd.id;
+        const nsStock = normalizeStock(upd.nsStock);
+        const desiredStatus = upd.status;
+        const manageValue = 'yes';
+        const inStock = nsStock > 0;
+        const stockStatus = inStock ? 'instock' : 'outofstock';
+
+        // Update post status
+        if (typeof desiredStatus === 'string') {
+          await conn.execute(
+            `UPDATE \`${TABLE_PREFIX}posts\` SET post_status = ? WHERE ID = ?`,
+            [desiredStatus, productId]
+          );
+        }
+
+        // Meta en bloque (DELETE + INSERT) para reducir I/O
+        let reg = upd.regular_price ? String(upd.regular_price) : null;
+        let sale = (upd.sale_price !== undefined && upd.sale_price !== null) ? String(upd.sale_price) : null;
+        const hasSale = !!sale && sale.trim() !== '' && Number(sale) > 0;
+        const effPrice = hasSale ? sale : (reg || '0');
+        const entries = [
+          { key: '_manage_stock', value: manageValue },
+          { key: '_stock', value: String(nsStock) },
+          { key: '_stock_status', value: stockStatus },
+          { key: '_price', value: effPrice },
+        ];
+        if (reg !== null) entries.push({ key: '_regular_price', value: reg });
+        if (sale !== null) entries.push({ key: '_sale_price', value: sale });
+        await setMetaBulk(conn, productId, entries);
+
+        const minPrice = Number(effPrice || 0);
+        const maxPrice = minPrice;
+        const onsale = hasSale && Number(sale) > 0 && (reg ? Number(sale) < Number(reg) : true) ? 1 : 0;
+
+        // Update wc_product_meta_lookup
+        await conn.execute(
+          `INSERT INTO \`${TABLE_PREFIX}wc_product_meta_lookup\` (product_id, stock_quantity, stock_status, min_price, max_price, onsale)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE stock_quantity=VALUES(stock_quantity), stock_status=VALUES(stock_status), min_price=VALUES(min_price), max_price=VALUES(max_price), onsale=VALUES(onsale)`,
+          [productId, nsStock, stockStatus, minPrice, maxPrice, onsale]
+        );
+
+        updated += 1;
+      }
+      await conn.commit();
+      break; // exit attempts loop if commit succeeded
+    } catch (err) {
+      await conn.rollback();
+      const msg = err?.code || err?.message || String(err);
+      const retriable = /ER_LOCK_DEADLOCK|ER_LOCK_WAIT_TIMEOUT/i.test(msg);
+      if (!retriable || attempt === attemptMax) {
+        failed += updates.length - updated;
+        console.warn('Transacción fallida al aplicar actualizaciones:', err?.message || err);
         break;
       }
+      // backoff antes de reintentar
+      await new Promise(r => setTimeout(r, 200 * attempt));
+    } finally {
+      conn.release();
     }
-  } catch (err) {
-    console.error('Error obteniendo todos los productos de WooCommerce:', err.message || err);
   }
-  return all;
+  return { updated, failed };
+}
+
+// Lectura paginada con cursor por ID para evitar cargar todo en memoria
+async function getWpProductsCursorBatch(afterId, limit) {
+  const pool = getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    const sql = `
+      SELECT 
+        p.ID AS id,
+        p.post_status AS status,
+        sku.meta_value AS sku,
+        manage.meta_value AS manage_stock,
+        stock.meta_value AS stock,
+        stock_status.meta_value AS stock_status,
+        regular.meta_value AS regular_price,
+        sale.meta_value AS sale_price,
+        price.meta_value AS price,
+        thumb.meta_value AS thumbnail_id,
+        lookup.stock_quantity AS lookup_stock_quantity,
+        lookup.stock_status AS lookup_stock_status,
+        lookup.min_price AS lookup_min_price,
+        lookup.max_price AS lookup_max_price,
+        lookup.onsale AS lookup_onsale
+      FROM \`${TABLE_PREFIX}posts\` p
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` sku ON sku.post_id = p.ID AND sku.meta_key = '_sku'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` manage ON manage.post_id = p.ID AND manage.meta_key = '_manage_stock'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` stock ON stock.post_id = p.ID AND stock.meta_key = '_stock'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` stock_status ON stock_status.post_id = p.ID AND stock_status.meta_key = '_stock_status'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` regular ON regular.post_id = p.ID AND regular.meta_key = '_regular_price'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` sale ON sale.post_id = p.ID AND sale.meta_key = '_sale_price'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` price ON price.post_id = p.ID AND price.meta_key = '_price'
+      LEFT JOIN \`${TABLE_PREFIX}postmeta\` thumb ON thumb.post_id = p.ID AND thumb.meta_key = '_thumbnail_id'
+      LEFT JOIN \`${TABLE_PREFIX}wc_product_meta_lookup\` lookup ON lookup.product_id = p.ID
+      WHERE p.post_type = 'product' AND p.ID > ?
+      ORDER BY p.ID ASC
+      LIMIT ?
+    `;
+    const [rows] = await conn.query(sql, [afterId, limit]);
+    return rows.map(r => ({
+      id: r.id,
+      status: r.status,
+      sku: r.sku ? String(r.sku).trim() : null,
+      manage_stock: r.manage_stock,
+      stock_quantity: r.stock ? Number(r.stock) : (r.lookup_stock_quantity ?? 0),
+      stock_status: r.stock_status || r.lookup_stock_status,
+      regular_price: r.regular_price,
+      sale_price: r.sale_price,
+      price: r.price,
+      has_image: !!r.thumbnail_id,
+    })).filter(p => p.sku);
+  } finally {
+    conn.release();
+  }
 }
 
 async function loginNovasoft() {
@@ -250,121 +417,84 @@ async function syncAllProductsOptimized(products) {
     };
   }
 
-  // Fase 1: Obtener todos los productos de WooCommerce
-  console.log('Obteniendo lista de productos existentes en WooCommerce...');
-  const wooProducts = await getAllWooProducts();
-  const wooSkuMap = new Map();
-  
-  // Crear mapa de SKUs existentes en WooCommerce
-  wooProducts.forEach(wooProduct => {
-    if (wooProduct.sku && wooProduct.sku.trim()) {
-      wooSkuMap.set(wooProduct.sku.trim().toLowerCase(), wooProduct);
-    }
-  });
-
-  // Fase 2: Procesar productos
-  console.log(`Procesando ${validProducts.length} productos de Novasoft...`);
-  const updates = [];
-  const nsSkuSet = new Set(validProducts.map(p => String(p.cod_item).trim().toLowerCase()));
-
-  // Procesar productos existentes en Novasoft
-  for (const product of validProducts) {
-    const sku = String(product.cod_item).trim().toLowerCase();
-    const wooProduct = wooSkuMap.get(sku);
-    
-    if (wooProduct) {
-      const nsStock = normalizeStock(product.existencia);
-      const currentStatus = wooProduct.status || PRODUCT_STATUS.DRAFT;
-      // Determinar nuevo estado por stock
-      let newStatus = determineProductStatus(nsStock);
-      // Forzar DRAFT si no tiene imagen (regla adicional)
-      const hasImage = Array.isArray(wooProduct.images) && wooProduct.images.length > 0;
-      if (!hasImage) {
-        newStatus = PRODUCT_STATUS.DRAFT;
-      }
-      
-      const update = {
-        id: wooProduct.id,
-        manage_stock: true,
-        stock_quantity: nsStock,
-        in_stock: nsStock > 0
-      };
-
-      // Actualizar precios si están disponibles
-      if (product.precioAnterior && product.precioAnterior > 0) {
-        update.regular_price = String(product.precioAnterior);
-      }
-      if (product.precioActual && product.precioActual > 0) {
-        update.sale_price = String(product.precioActual);
-      }
-
-      // Actualizar estado según las reglas (solo público si tiene imagen y cumple umbral)
-      if (currentStatus !== newStatus) {
-        update.status = newStatus;
-      }
-
-      updates.push(update);
-    }
+  // Fase 1 y 2: construir mapa de Novasoft y paginar lectura de WP para evitar picos de memoria
+  console.log('Construyendo referencia de Novasoft y activando lectura paginada de WP...');
+  const nsInfoMap = new Map();
+  for (const p of validProducts) {
+    const sku = String(p.cod_item).trim().toLowerCase();
+    nsInfoMap.set(sku, {
+      existencia: normalizeStock(p.existencia),
+      precioAnterior: p.precioAnterior,
+      precioActual: p.precioActual,
+    });
   }
-
-  // Procesar productos en WooCommerce que no están en Novasoft
-  const missingInNovasoft = wooProducts.filter(wp => 
-    wp.sku && !nsSkuSet.has(wp.sku.trim().toLowerCase())
-  );
-
-  for (const wooProduct of missingInNovasoft) {
-    if (wooProduct.status !== PRODUCT_STATUS.DRAFT) {
-      updates.push({
-        id: wooProduct.id,
-        status: PRODUCT_STATUS.DRAFT,
-        manage_stock: true,
-        stock_quantity: 0,
-        in_stock: false
-      });
-    }
-  }
-
-  // Fase 3: Aplicar actualizaciones por lotes
-  console.log(`Aplicando ${updates.length} actualizaciones...`);
+  const PAGE_SIZE = Number(process.env.CRON_PAGE_SIZE || 500);
+  const CONCURRENCY = Number(process.env.CRON_CONCURRENCY || 4);
+  let afterId = 0;
+  let statusChanges = { toDraft: 0, toPublish: 0 };
   let successful = 0;
   let failed = 0;
-  let statusChanges = { toDraft: 0, toPublish: 0 };
+  const pendingChunks = [];
+  while (true) {
+    const batch = await getWpProductsCursorBatch(afterId, PAGE_SIZE);
+    if (batch.length === 0) break;
+    afterId = batch[batch.length - 1].id;
 
-  const BATCH_SIZE = 100;
-  for (let i = 0; i < updates.length; i += BATCH_SIZE) {
-    const chunk = updates.slice(i, i + BATCH_SIZE);
-    try {
-      await makeWooRequest('products/batch', 'POST', { update: chunk }, { retries: 3, retryDelayMs: 600 });
-      
-      // Contabilizar cambios de estado
-      chunk.forEach(update => {
-        if (update.status === PRODUCT_STATUS.DRAFT) {
-          statusChanges.toDraft++;
-        } else if (update.status === PRODUCT_STATUS.PUBLISH) {
-          statusChanges.toPublish++;
-        }
-      });
-
-      successful += chunk.length;
-    } catch (error) {
-      console.warn('Error en actualización por lotes:', error?.message || error);
-      failed += chunk.length;
+    const updatesBatch = [];
+    for (const wp of batch) {
+      const sku = wp.sku ? String(wp.sku).trim().toLowerCase() : null;
+      if (!sku) continue;
+      const ns = nsInfoMap.get(sku);
+      if (ns) {
+        const nsStock = ns.existencia;
+        const currentStatus = wp.status || PRODUCT_STATUS.DRAFT;
+        let newStatus = determineProductStatus(nsStock);
+        if (!wp.has_image) newStatus = PRODUCT_STATUS.DRAFT;
+        const update = {
+          id: wp.id,
+          nsStock,
+          regular_price: (ns.precioAnterior && ns.precioAnterior > 0) ? String(ns.precioAnterior) : undefined,
+          sale_price: (ns.precioActual && ns.precioActual > 0) ? String(ns.precioActual) : undefined,
+          status: currentStatus !== newStatus ? newStatus : undefined,
+        };
+        if (update.status === PRODUCT_STATUS.DRAFT) statusChanges.toDraft++;
+        else if (update.status === PRODUCT_STATUS.PUBLISH) statusChanges.toPublish++;
+        updatesBatch.push(update);
+      } else {
+        updatesBatch.push({
+          id: wp.id,
+          nsStock: 0,
+          status: PRODUCT_STATUS.DRAFT,
+          regular_price: undefined,
+          sale_price: undefined,
+        });
+        statusChanges.toDraft++;
+      }
     }
 
-    if (i + BATCH_SIZE < updates.length) {
-      await new Promise(resolve => setTimeout(resolve, 120));
+    if (updatesBatch.length > 0) {
+      pendingChunks.push(updatesBatch);
+      if (pendingChunks.length >= CONCURRENCY) {
+        const results = await Promise.all(pendingChunks.map(chunk => applyBatchUpdatesTransactional(chunk)));
+        for (const r of results) { successful += r.updated; failed += r.failed; }
+        pendingChunks.length = 0;
+      }
     }
+  }
+  if (pendingChunks.length > 0) {
+    const results = await Promise.all(pendingChunks.map(chunk => applyBatchUpdatesTransactional(chunk)));
+    for (const r of results) { successful += r.updated; failed += r.failed; }
   }
 
   return {
     success: failed === 0,
     results,
     summary: {
-      total: updates.length,
+      total: successful + failed,
       successful,
       failed,
       skipped: 0,
-      existingInWoo: wooProducts.length,
+      existingInWoo: successful + failed,
       totalNovasoft: products.length,
       statusChanges
     }
@@ -379,6 +509,8 @@ async function runSync() {
 
   let db;
   try {
+    // Asegurar índices críticos antes de tocar tablas grandes
+    await ensureIndexes();
     // Configuración de la base de datos SQLite
     const HISTORY_DB_PATH = path.resolve(process.cwd(), 'cron_history.db');
     db = await open({ filename: HISTORY_DB_PATH, driver: sqlite3.Database });
@@ -445,6 +577,14 @@ async function runSync() {
       );
     }
 
+    // Invalidar transients de WooCommerce para evitar caches desfasados
+    try {
+      await invalidateWooTransients();
+      console.log('Transients de WooCommerce eliminados en wp_options.');
+    } catch (e) {
+      console.warn('No se pudo invalidar transients de WooCommerce:', e?.message || e);
+    }
+
     console.log(`Sincronización completada en ${Math.round(durationMs / 1000)}s`);
     console.log(`Resumen: ${syncResult.summary.successful} éxitos, ${syncResult.summary.failed} fallos`);
     console.log(`Cambios de estado: ${syncResult.summary.statusChanges.toDraft} a borrador, ${syncResult.summary.statusChanges.toPublish} a público`);
@@ -484,3 +624,55 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception en cron:', err);
 });
+
+// Utilidad: invalidar transients de WooCommerce eliminando filas (más seguro que poner NULL)
+async function invalidateWooTransients() {
+  const pool = getMysqlPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    // WordPress guarda transients en dos filas: valor y timeout
+    await conn.execute(`DELETE FROM \`${TABLE_PREFIX}options\` WHERE option_name LIKE '_transient_wc_%'`);
+    await conn.execute(`DELETE FROM \`${TABLE_PREFIX}options\` WHERE option_name LIKE '_transient_timeout_wc_%'`);
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+// Modo CLI para solo invalidar transients y salir
+if (process.argv.includes('--invalidate-transients')) {
+  (async () => {
+    try {
+      await invalidateWooTransients();
+      console.log('Transients de WooCommerce eliminados.');
+      process.exit(0);
+    } catch (e) {
+      console.error('Error eliminando transients:', e?.message || e);
+      process.exit(1);
+    }
+  })();
+}
+
+// Escritura de metadatos en bloque: elimina claves objetivo y reinserta
+async function setMetaBulk(conn, postId, entries) {
+  if (!entries || entries.length === 0) return;
+  const keys = entries.map(e => e.key);
+  const placeholders = keys.map(() => '?').join(',');
+  await conn.execute(
+    `DELETE FROM \`${TABLE_PREFIX}postmeta\` WHERE post_id = ? AND meta_key IN (${placeholders})`,
+    [postId, ...keys]
+  );
+  const values = [];
+  const tuples = entries.map(e => {
+    values.push(postId, e.key, e.value);
+    return '(?, ?, ?)';
+  }).join(',');
+  await conn.execute(
+    `INSERT INTO \`${TABLE_PREFIX}postmeta\` (post_id, meta_key, meta_value) VALUES ${tuples}`,
+    values
+  );
+}

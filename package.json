@@ -7,7 +7,7 @@
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "cron": "node scripts/cron-sync.js"
+    "cron": "cross-env CRON_RUN_ON_START=true CRON_PAGE_SIZE=500 CRON_CONCURRENCY=4 node scripts/cron-sync.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -19,10 +19,10 @@
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@types/node-cron": "^3.0.11",
-    "@woocommerce/woocommerce-rest-api": "^1.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.545.0",
+    "mysql2": "^3.11.3",
     "next": "15.5.4",
     "node-cron": "^4.2.1",
     "react": "19.1.0",
@@ -40,6 +40,7 @@
     "@types/node": "^20",
     "@types/react": "19.2.2",
     "@types/react-dom": "^19",
+    "cross-env": "^7.0.3",
     "eslint": "^9",
     "eslint-config-next": "15.5.4",
     "tailwindcss": "^4",
