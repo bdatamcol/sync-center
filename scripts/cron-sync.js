@@ -57,7 +57,7 @@ function getMysqlPool() {
     mysqlPool = mysql.createPool({
       ...MYSQL_CONFIG,
       waitForConnections: true,
-      connectionLimit: Number(process.env.CRON_DB_POOL_SIZE || 50),
+      connectionLimit: Number(process.env.CRON_DB_POOL_SIZE || 100),
       queueLimit: 0,
     });
   }
@@ -186,6 +186,7 @@ async function applyBatchUpdatesTransactional(updates) {
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+      const lookupRows = [];
       for (const upd of updates) {
         const productId = upd.id;
         const nsStock = normalizeStock(upd.nsStock);
@@ -221,15 +222,19 @@ async function applyBatchUpdatesTransactional(updates) {
         const maxPrice = minPrice;
         const onsale = hasSale && Number(sale) > 0 && (reg ? Number(sale) < Number(reg) : true) ? 1 : 0;
 
-        // Update wc_product_meta_lookup
-        await conn.execute(
-          `INSERT INTO \`${TABLE_PREFIX}wc_product_meta_lookup\` (product_id, stock_quantity, stock_status, min_price, max_price, onsale)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE stock_quantity=VALUES(stock_quantity), stock_status=VALUES(stock_status), min_price=VALUES(min_price), max_price=VALUES(max_price), onsale=VALUES(onsale)`,
-          [productId, nsStock, stockStatus, minPrice, maxPrice, onsale]
-        );
+        // Acumular fila para upsert bulk en wc_product_meta_lookup
+        lookupRows.push([productId, nsStock, stockStatus, minPrice, maxPrice, onsale]);
 
         updated += 1;
+      }
+      // Ejecutar upsert bulk si hay filas acumuladas
+      if (lookupRows.length > 0) {
+        const placeholders = lookupRows.map(() => '(?, ?, ?, ?, ?, ?)').join(',');
+        const flatValues = lookupRows.flat();
+        const sql = `INSERT INTO \`${TABLE_PREFIX}wc_product_meta_lookup\` (product_id, stock_quantity, stock_status, min_price, max_price, onsale)
+          VALUES ${placeholders}
+          ON DUPLICATE KEY UPDATE stock_quantity=VALUES(stock_quantity), stock_status=VALUES(stock_status), min_price=VALUES(min_price), max_price=VALUES(max_price), onsale=VALUES(onsale)`;
+        await conn.execute(sql, flatValues);
       }
       await conn.commit();
       break; // exit attempts loop if commit succeeded
@@ -261,28 +266,10 @@ async function getWpProductsCursorBatch(afterId, limit) {
         p.ID AS id,
         p.post_status AS status,
         sku.meta_value AS sku,
-        manage.meta_value AS manage_stock,
-        stock.meta_value AS stock,
-        stock_status.meta_value AS stock_status,
-        regular.meta_value AS regular_price,
-        sale.meta_value AS sale_price,
-        price.meta_value AS price,
-        thumb.meta_value AS thumbnail_id,
-        lookup.stock_quantity AS lookup_stock_quantity,
-        lookup.stock_status AS lookup_stock_status,
-        lookup.min_price AS lookup_min_price,
-        lookup.max_price AS lookup_max_price,
-        lookup.onsale AS lookup_onsale
+        thumb.meta_value AS thumbnail_id
       FROM \`${TABLE_PREFIX}posts\` p
       LEFT JOIN \`${TABLE_PREFIX}postmeta\` sku ON sku.post_id = p.ID AND sku.meta_key = '_sku'
-      LEFT JOIN \`${TABLE_PREFIX}postmeta\` manage ON manage.post_id = p.ID AND manage.meta_key = '_manage_stock'
-      LEFT JOIN \`${TABLE_PREFIX}postmeta\` stock ON stock.post_id = p.ID AND stock.meta_key = '_stock'
-      LEFT JOIN \`${TABLE_PREFIX}postmeta\` stock_status ON stock_status.post_id = p.ID AND stock_status.meta_key = '_stock_status'
-      LEFT JOIN \`${TABLE_PREFIX}postmeta\` regular ON regular.post_id = p.ID AND regular.meta_key = '_regular_price'
-      LEFT JOIN \`${TABLE_PREFIX}postmeta\` sale ON sale.post_id = p.ID AND sale.meta_key = '_sale_price'
-      LEFT JOIN \`${TABLE_PREFIX}postmeta\` price ON price.post_id = p.ID AND price.meta_key = '_price'
       LEFT JOIN \`${TABLE_PREFIX}postmeta\` thumb ON thumb.post_id = p.ID AND thumb.meta_key = '_thumbnail_id'
-      LEFT JOIN \`${TABLE_PREFIX}wc_product_meta_lookup\` lookup ON lookup.product_id = p.ID
       WHERE p.post_type = 'product' AND p.ID > ?
       ORDER BY p.ID ASC
       LIMIT ?
@@ -292,12 +279,6 @@ async function getWpProductsCursorBatch(afterId, limit) {
       id: r.id,
       status: r.status,
       sku: r.sku ? String(r.sku).trim() : null,
-      manage_stock: r.manage_stock,
-      stock_quantity: r.stock ? Number(r.stock) : (r.lookup_stock_quantity ?? 0),
-      stock_status: r.stock_status || r.lookup_stock_status,
-      regular_price: r.regular_price,
-      sale_price: r.sale_price,
-      price: r.price,
       has_image: !!r.thumbnail_id,
     })).filter(p => p.sku);
   } finally {
@@ -412,13 +393,15 @@ async function syncAllProductsOptimized(products) {
         skipped: 0,
         existingInWoo: 0,
         totalNovasoft: products.length,
-        statusChanges: { toDraft: 0, toPublish: 0 }
+        statusChanges: { toDraft: 0, toPublish: 0 },
+        perf: { nsMapMs: 0, wpReadMs: 0, applyMs: 0, pageSize: Number(process.env.CRON_PAGE_SIZE || 500), concurrency: Number(process.env.CRON_CONCURRENCY || 4), poolSize: Number(process.env.CRON_DB_POOL_SIZE || 100), batches: 0, processed: 0 }
       }
     };
   }
 
   // Fase 1 y 2: construir mapa de Novasoft y paginar lectura de WP para evitar picos de memoria
   console.log('Construyendo referencia de Novasoft y activando lectura paginada de WP...');
+  const tMapStart = Date.now();
   const nsInfoMap = new Map();
   for (const p of validProducts) {
     const sku = String(p.cod_item).trim().toLowerCase();
@@ -428,17 +411,26 @@ async function syncAllProductsOptimized(products) {
       precioActual: p.precioActual,
     });
   }
+  const tMapEnd = Date.now();
   const PAGE_SIZE = Number(process.env.CRON_PAGE_SIZE || 500);
   const CONCURRENCY = Number(process.env.CRON_CONCURRENCY || 4);
+  const TX_BATCH_SIZE = Number(process.env.CRON_TX_BATCH_SIZE || 250);
   let afterId = 0;
   let statusChanges = { toDraft: 0, toPublish: 0 };
   let successful = 0;
   let failed = 0;
+  let wpReadMs = 0;
+  let applyMs = 0;
+  let batches = 0;
+  let processed = 0;
   const pendingChunks = [];
   while (true) {
+    const tReadStart = Date.now();
     const batch = await getWpProductsCursorBatch(afterId, PAGE_SIZE);
+    wpReadMs += Date.now() - tReadStart;
     if (batch.length === 0) break;
     afterId = batch[batch.length - 1].id;
+    processed += batch.length;
 
     const updatesBatch = [];
     for (const wp of batch) {
@@ -473,17 +465,26 @@ async function syncAllProductsOptimized(products) {
     }
 
     if (updatesBatch.length > 0) {
-      pendingChunks.push(updatesBatch);
+      // Dividir en sublotes para transacciones más cortas y mayor paralelización
+      for (let i = 0; i < updatesBatch.length; i += TX_BATCH_SIZE) {
+        pendingChunks.push(updatesBatch.slice(i, i + TX_BATCH_SIZE));
+      }
       if (pendingChunks.length >= CONCURRENCY) {
+        const tApplyStart = Date.now();
         const results = await Promise.all(pendingChunks.map(chunk => applyBatchUpdatesTransactional(chunk)));
+        applyMs += Date.now() - tApplyStart;
         for (const r of results) { successful += r.updated; failed += r.failed; }
+        batches += pendingChunks.length;
         pendingChunks.length = 0;
       }
     }
   }
   if (pendingChunks.length > 0) {
+    const tApplyStart = Date.now();
     const results = await Promise.all(pendingChunks.map(chunk => applyBatchUpdatesTransactional(chunk)));
+    applyMs += Date.now() - tApplyStart;
     for (const r of results) { successful += r.updated; failed += r.failed; }
+    batches += pendingChunks.length;
   }
 
   return {
@@ -496,7 +497,17 @@ async function syncAllProductsOptimized(products) {
       skipped: 0,
       existingInWoo: successful + failed,
       totalNovasoft: products.length,
-      statusChanges
+      statusChanges,
+      perf: {
+        nsMapMs: tMapEnd - tMapStart,
+        wpReadMs,
+        applyMs,
+        pageSize: PAGE_SIZE,
+        concurrency: CONCURRENCY,
+        poolSize: Number(process.env.CRON_DB_POOL_SIZE || 100),
+        batches,
+        processed,
+      }
     }
   };
 }
@@ -565,7 +576,8 @@ async function runSync() {
          failed_products = ?, 
          status_changes = ?,
          duration = ?, 
-         error_message = NULL 
+         error_message = NULL,
+         details = ?
          WHERE id = ?`,
         finishedAt,
         syncResult.summary.total,
@@ -573,6 +585,7 @@ async function runSync() {
         syncResult.summary.failed,
         JSON.stringify(syncResult.summary.statusChanges),
         durationMs,
+        JSON.stringify(syncResult.summary.perf || {}),
         executionId
       );
     }
@@ -588,6 +601,34 @@ async function runSync() {
     console.log(`Sincronización completada en ${Math.round(durationMs / 1000)}s`);
     console.log(`Resumen: ${syncResult.summary.successful} éxitos, ${syncResult.summary.failed} fallos`);
     console.log(`Cambios de estado: ${syncResult.summary.statusChanges.toDraft} a borrador, ${syncResult.summary.statusChanges.toPublish} a público`);
+    if (syncResult.summary.perf) {
+      const perf = syncResult.summary.perf;
+      console.log(`Métricas: nsMap=${perf.nsMapMs}ms, wpRead=${perf.wpReadMs}ms, apply=${perf.applyMs}ms, batches=${perf.batches}, processed=${perf.processed}, pageSize=${perf.pageSize}, concurrency=${perf.concurrency}, poolSize=${perf.poolSize}`);
+    }
+
+    // Estadísticas históricas de duración (últimas 10 ejecuciones)
+    try {
+      if (db) {
+        const rows = await db.all(`SELECT duration FROM cron_executions WHERE status='completed' AND duration IS NOT NULL ORDER BY id DESC LIMIT 10`);
+        const durs = rows.map(r => Number(r.duration || 0)).filter(v => Number.isFinite(v) && v > 0);
+        if (durs.length > 0) {
+          const avg = Math.round(durs.reduce((a, b) => a + b, 0) / durs.length);
+          const sorted = [...durs].sort((a, b) => a - b);
+          const med = sorted[Math.floor(sorted.length / 2)];
+          const p90 = sorted[Math.floor(sorted.length * 0.9)];
+          console.log(`Histórico últimas ${durs.length}: avg=${Math.round(avg/1000)}s, med=${Math.round(med/1000)}s, p90=${Math.round(p90/1000)}s`);
+        }
+      }
+    } catch (e) {
+      console.warn('No se pudieron calcular estadísticas históricas:', e?.message || e);
+    }
+
+    // Recursos del proceso
+    try {
+      const mem = process.memoryUsage();
+      const toMB = (n) => Math.round(n / 1024 / 1024);
+      console.log(`Recursos: rss=${toMB(mem.rss)}MB, heapUsed=${toMB(mem.heapUsed)}MB, external=${toMB(mem.external)}MB`);
+    } catch {}
 
   } catch (err) {
     console.error('Error en sincronización:', err);

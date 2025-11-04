@@ -195,37 +195,58 @@ class ApiService {
   }
 
   async getProducts(): Promise<ProductsResponse> {
-    if (!this.token) {
+    const isProxy = typeof NS_PRODUCTS_URL === 'string' && NS_PRODUCTS_URL.startsWith('/');
+    if (!this.token && !isProxy) {
       return {
         success: false,
         error: 'Token de autenticación requerido',
       };
     }
 
+    const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit & { timeoutMs?: number } = {}) => {
+      const { timeoutMs = 15000, ...opts } = init;
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(input, { ...opts, signal: controller.signal });
+      } finally {
+        clearTimeout(id);
+      }
+    };
+
     try {
       console.log('Obteniendo productos de la API:', NS_PRODUCTS_URL);
       console.log('Token:', this.token);
       
-      const response = await fetch(NS_PRODUCTS_URL, {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (this.token && !isProxy) headers['Authorization'] = `Bearer ${this.token}`;
+
+      const response = await fetchWithTimeout(NS_PRODUCTS_URL, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
-        }
+        headers,
+        timeoutMs: 15000
       });
 
       console.log('Response status:', response.status);
       console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Error response:', errorText);
-        return {
-          success: false,
-          error: `Error HTTP ${response.status}: ${response.statusText}`,
-        };
+        const ct = response.headers.get('content-type') || '';
+        const errorPayload = ct.includes('application/json') ? await response.json() : await response.text();
+        console.error('Error response:', errorPayload);
+        let message = `Error HTTP ${response.status}: ${response.statusText}`;
+        if (response.status === 404) message = 'Endpoint de productos no encontrado (404). Verifique la URL base.';
+        if (response.status === 401) message = 'No autorizado (401). Token inválido o ausente.';
+        return { success: false, error: message };
       }
 
+      const ct = response.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        console.error('Respuesta no JSON de la API de productos, content-type:', ct);
+        return { success: false, error: 'Respuesta inesperada de la API (no JSON)' };
+      }
       const data = await response.json();
       console.log('API Response:', data);
 
@@ -253,45 +274,65 @@ class ApiService {
       };
     } catch (error) {
       console.error('Error al obtener productos:', error);
-      return {
-        success: false,
-        error: `Error de conexión: ${error instanceof Error ? error.message : 'Error desconocido'}`,
-      };
+      const msg = error instanceof Error ? error.message : 'Error desconocido';
+      const isAbort = error instanceof Error && /aborted|AbortError/i.test(error.message);
+      return { success: false, error: isAbort ? 'Timeout de la solicitud de productos' : `Error de conexión: ${msg}` };
     }
   }
 
   async getPrices(): Promise<PricesResponse> {
-    if (!this.token) {
+    const isProxy = typeof NS_PRICES_URL === 'string' && NS_PRICES_URL.startsWith('/');
+    if (!this.token && !isProxy) {
       return {
         success: false,
         error: 'Token de autenticación requerido',
       };
     }
 
+    const fetchWithTimeout = async (input: RequestInfo | URL, init: RequestInit & { timeoutMs?: number } = {}) => {
+      const { timeoutMs = 15000, ...opts } = init;
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(input, { ...opts, signal: controller.signal });
+      } finally {
+        clearTimeout(id);
+      }
+    };
+
     try {
       console.log('Obteniendo precios de la API:', NS_PRICES_URL);
       console.log('Token:', this.token);
       
-      const response = await fetch(NS_PRICES_URL, {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (this.token && !isProxy) headers['Authorization'] = `Bearer ${this.token}`;
+
+      const response = await fetchWithTimeout(NS_PRICES_URL, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
-        }
+        headers,
+        timeoutMs: 15000
       });
 
       console.log('Response status:', response.status);
       console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Error response:', errorText);
-        return {
-          success: false,
-          error: `Error HTTP ${response.status}: ${response.statusText}`,
-        };
+        const ct = response.headers.get('content-type') || '';
+        const errorPayload = ct.includes('application/json') ? await response.json() : await response.text();
+        console.error('Error response:', errorPayload);
+        let message = `Error HTTP ${response.status}: ${response.statusText}`;
+        if (response.status === 404) message = 'Endpoint de precios no encontrado (404).';
+        if (response.status === 401) message = 'No autorizado (401).';
+        return { success: false, error: message };
       }
 
+      const ct = response.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        console.error('Respuesta no JSON de la API de precios, content-type:', ct);
+        return { success: false, error: 'Respuesta inesperada de la API (no JSON)' };
+      }
       const data = await response.json();
       console.log('API Response (precios):', data);
 
@@ -321,10 +362,9 @@ class ApiService {
       };
     } catch (error) {
       console.error('Error al obtener precios:', error);
-      return {
-        success: false,
-        error: `Error de conexión: ${error instanceof Error ? error.message : 'Error desconocido'}`,
-      };
+      const msg = error instanceof Error ? error.message : 'Error desconocido';
+      const isAbort = error instanceof Error && /aborted|AbortError/i.test(error.message);
+      return { success: false, error: isAbort ? 'Timeout de la solicitud de precios' : `Error de conexión: ${msg}` };
     }
   }
 

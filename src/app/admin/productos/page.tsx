@@ -21,6 +21,8 @@ export default function ProductosPage() {
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<{ ok: boolean; results: Array<{ name: string; ok: boolean; status?: number; message?: string }> } | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
   const [sortConfig, setSortConfig] = useState<{
     key: keyof Product | null
@@ -179,6 +181,20 @@ export default function ProductosPage() {
       setError("Error de conexión con el servidor")
     } finally {
       setLoading(false)
+    }
+  }
+
+  const runDiagnostics = async () => {
+    setDiagnosing(true)
+    setDiagnostics(null)
+    try {
+      const res = await fetch('/api/diagnostics/novasoft')
+      const data = await res.json()
+      setDiagnostics(data)
+    } catch (e) {
+      setDiagnostics({ ok: false, results: [{ name: 'client.fetch', ok: false, message: e instanceof Error ? e.message : 'Error desconocido' }] })
+    } finally {
+      setDiagnosing(false)
     }
   }
 
@@ -991,6 +1007,16 @@ export default function ProductosPage() {
             )}
           </Button>
 
+          <Button
+            onClick={runDiagnostics}
+            disabled={diagnosing}
+            className="flex items-center gap-2 cursor-pointer bg-slate-600 hover:bg-slate-700 text-white shadow-lg shadow-slate-600/20 disabled:opacity-50 transition-all duration-200"
+            title="Ejecutar diagnóstico de conectividad y configuración"
+          >
+            <Search className={`h-4 w-4 ${diagnosing ? 'animate-spin' : ''}`} />
+            {diagnosing ? 'Diagnosticando...' : 'Diagnosticar'}
+          </Button>
+
           {verificationProgress.isActive && (
             <div className="flex items-center gap-3 text-sm text-foreground bg-card/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-border/50 shadow-sm">
               <div className="flex items-center gap-1.5">
@@ -1092,7 +1118,36 @@ export default function ProductosPage() {
           {error && (
             <div className="mb-6 p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex items-center gap-3">
               <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0" />
-              <span className="text-destructive font-medium">{error}</span>
+              <div className="flex flex-col gap-1">
+                <span className="text-destructive font-medium">{error}</span>
+                {/(404)/.test(error) && (
+                  <span className="text-sm text-muted-foreground">Verifica que la aplicación esté usando las rutas locales del proxy y que el backend esté corriendo.</span>
+                )}
+                {/(401|No autorizado)/.test(error) && (
+                  <span className="text-sm text-muted-foreground">Revisa las credenciales de Novasoft en el archivo env.</span>
+                )}
+                {/Timeout/.test(error) && (
+                  <span className="text-sm text-muted-foreground">El servidor tardó demasiado en responder. Intenta nuevamente o valida la conectividad.</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {diagnostics && (
+            <div className="mb-6 p-4 bg-muted border border-border rounded-lg">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-medium">Diagnóstico de Novasoft</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${diagnostics.ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{diagnostics.ok ? 'OK' : 'Problemas detectados'}</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {diagnostics.results.map((r, idx) => (
+                  <div key={idx} className={`text-sm flex items-center gap-2 p-2 rounded border ${r.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                    <span className="font-mono">{r.name}</span>
+                    <span className="opacity-70">{typeof r.status === 'number' ? `(${r.status})` : ''}</span>
+                    <span className="ml-auto">{r.message || (r.ok ? 'OK' : 'Error')}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
