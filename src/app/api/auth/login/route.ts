@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const AUTH_URL = process.env.NS_AUTH_URL || process.env.API_BASE_URL || 'http://190.85.4.139:3000/api/auth';
+const AUTH_URL = process.env.NS_AUTH_URL || process.env.NEXT_PUBLIC_API_URL_BDATAM+'/auth';
 const USER = process.env.NOVASOFT_USER || '';
 const PASS = process.env.NOVASOFT_PASS || '';
 
