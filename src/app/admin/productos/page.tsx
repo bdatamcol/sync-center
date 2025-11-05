@@ -695,70 +695,6 @@ export default function ProductosPage() {
     )
   }
 
-  const adjustBatchSize = (performance: typeof batchPerformance): number => {
-    return 100
-  }
-
-  const retryFailedProduct = async (
-    product: Product,
-    attempt = 1,
-  ): Promise<{ product: string; success: boolean; message: string }> => {
-    const maxRetries = 3
-    const retryDelay = attempt * 1000
-
-    try {
-      if (attempt > 1) {
-        await new Promise((resolve) => setTimeout(resolve, retryDelay))
-      }
-
-      const result = await apiService.syncProductWithWooCommerce(product)
-
-      if (result.success) {
-        const cacheKey = `${product.cod_item}_${product.precioActual}_${product.existencia}`
-        setSyncCache(
-          (prev) =>
-            new Map(
-              prev.set(cacheKey, {
-                timestamp: Date.now(),
-                existencia: product.existencia,
-                precio: product.precioActual,
-                result: {
-                  success: result.success,
-                  message: result.message,
-                  productId: result.productData?.id || 0,
-                  product: product.cod_item || "Sin código",
-                },
-              }),
-            ),
-        )
-
-        return {
-          product: product.cod_item || "Sin código",
-          success: true,
-          message: `${result.message} (intento ${attempt})`,
-        }
-      } else if (attempt < maxRetries) {
-        return await retryFailedProduct(product, attempt + 1)
-      } else {
-        return {
-          product: product.cod_item || "Sin código",
-          success: false,
-          message: `${result.error || result.message} (falló después de ${maxRetries} intentos)`,
-        }
-      }
-    } catch (error) {
-      if (attempt < maxRetries) {
-        return await retryFailedProduct(product, attempt + 1)
-      } else {
-        return {
-          product: product.cod_item || "Sin código",
-          success: false,
-          message: `Error de conexión (falló después de ${maxRetries} intentos)`,
-        }
-      }
-    }
-  }
-
   const handleBulkSync = async () => {
     const allProducts = filteredProducts.filter((p) => p.cod_item)
     const productsToSync = allProducts.filter(needsSync)
@@ -862,7 +798,7 @@ export default function ProductosPage() {
             { product: "Ajuste de ausentes", success: adjustResult.failed === 0, message: summaryMsg },
           ],
         }))
-      } catch (error) {
+      } catch {
         const errMsg = "Error ajustando productos ausentes en Novasoft"
         setBulkSyncResults((prev) => ({
           ...prev,

@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useInventory } from '@/hooks/use-inventory';
 import { useFilterOptions } from '@/hooks/use-filter-options';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { 
   Card, 
   CardContent, 
@@ -29,7 +28,6 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { 
-  Search, 
   Filter, 
   RefreshCw, 
   Package, 

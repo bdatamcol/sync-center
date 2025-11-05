@@ -56,8 +56,9 @@ export async function GET() {
       }
     }
     results.push({ name: 'novasoft.login', ok, status, message })
-  } catch (e: any) {
-    results.push({ name: 'novasoft.login', ok: false, message: `Error: ${e?.message || e}` })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    results.push({ name: 'novasoft.login', ok: false, message: `Error: ${msg}` })
   }
 
   // 3) Consultar productos vía proxy local
@@ -77,8 +78,9 @@ export async function GET() {
       message = ct.includes('application/json') ? 'Productos OK' : 'Productos no JSON'
     }
     results.push({ name: 'proxy.products', ok, status, message })
-  } catch (e: any) {
-    results.push({ name: 'proxy.products', ok: false, message: `Error: ${e?.message || e}` })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    results.push({ name: 'proxy.products', ok: false, message: `Error: ${msg}` })
   }
 
   // 4) Consultar precios vía proxy local
@@ -98,8 +100,9 @@ export async function GET() {
       message = ct.includes('application/json') ? 'Precios OK' : 'Precios no JSON'
     }
     results.push({ name: 'proxy.prices', ok, status, message })
-  } catch (e: any) {
-    results.push({ name: 'proxy.prices', ok: false, message: `Error: ${e?.message || e}` })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    results.push({ name: 'proxy.prices', ok: false, message: `Error: ${msg}` })
   }
 
   const overallOk = results.every(r => r.ok)

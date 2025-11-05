@@ -9,10 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Table } from '@/components/ui/table';
 import { 
   Search, 
-  Filter, 
   Download, 
   RefreshCw,
   ChevronLeft,
@@ -39,7 +37,7 @@ export default function InventoryPage() {
     limit: pageSize
   });
 
-  const { options, loading: optionsLoading } = useFilterOptions();
+  const { options } = useFilterOptions();
 
   // Filtrar datos localmente por término de búsqueda
   const filteredData = useMemo(() => {

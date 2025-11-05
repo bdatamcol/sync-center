@@ -1,0 +1,93 @@
+﻿
+> syncenter@0.1.0 build
+> next build --turbopack
+
+   Ôû▓ Next.js 15.5.4 (Turbopack)
+   - Environments: .env
+
+   Creating an optimized production build ...
+ Ô£ô Finished writing to disk in 44ms
+ Ô£ô Compiled successfully in 2.1s
+   Linting and checking validity of types ...
+
+./src/app/admin/page.tsx
+5:69  Warning: 'LayoutDashboard' is defined but never used.  @typescript-eslint/no-unused-vars
+122:6  Warning: React Hook useEffect has a missing dependency: 'fetchStats'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+
+./src/app/admin/productos/page.tsx
+212:6  Warning: React Hook useEffect has missing dependencies: 'verifyAllProducts' and 'verifyingProducts.size'. Either include them or remove the dependency array.  react-hooks/exhaustive-deps
+698:9  Warning: 'adjustBatchSize' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+698:28  Warning: 'performance' is defined but never used.  @typescript-eslint/no-unused-vars
+702:9  Warning: 'retryFailedProduct' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+749:14  Warning: 'error' is defined but never used.  @typescript-eslint/no-unused-vars
+865:16  Warning: 'error' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/dashboard/inventory/page.tsx
+12:10  Warning: 'Table' is defined but never used.  @typescript-eslint/no-unused-vars
+15:3  Warning: 'Filter' is defined but never used.  @typescript-eslint/no-unused-vars
+42:29  Warning: 'optionsLoading' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/dashboard/layout.tsx
+10:3  Warning: 'Filter' is defined but never used.  @typescript-eslint/no-unused-vars
+14:3  Warning: 'TrendingUp' is defined but never used.  @typescript-eslint/no-unused-vars
+15:3  Warning: 'Search' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/dashboard/page.tsx
+7:10  Warning: 'Input' is defined but never used.  @typescript-eslint/no-unused-vars
+32:3  Warning: 'Search' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/app/page.tsx
+7:58  Warning: 'CardTitle' is defined but never used.  @typescript-eslint/no-unused-vars
+70:14  Warning: 'error' is defined but never used.  @typescript-eslint/no-unused-vars
+
+./src/components/ui/sidebar.tsx
+14:3  Warning: 'Sheet' is defined but never used.  @typescript-eslint/no-unused-vars
+15:3  Warning: 'SheetContent' is defined but never used.  @typescript-eslint/no-unused-vars
+16:3  Warning: 'SheetDescription' is defined but never used.  @typescript-eslint/no-unused-vars
+17:3  Warning: 'SheetHeader' is defined but never used.  @typescript-eslint/no-unused-vars
+18:3  Warning: 'SheetTitle' is defined but never used.  @typescript-eslint/no-unused-vars
+31:7  Warning: 'SIDEBAR_WIDTH_MOBILE' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+33:7  Warning: 'SIDEBAR_KEYBOARD_SHORTCUT' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+155:28  Warning: 'openMobile' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+155:40  Warning: 'setOpenMobile' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+./src/lib/api.ts
+1123:36  Warning: 'onBatchComplete' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+
+info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules
+   Collecting page data ...
+   Generating static pages (0/15) ...
+   Generating static pages (3/15) 
+   Generating static pages (7/15) 
+   Generating static pages (11/15) 
+ Ô£ô Generating static pages (15/15)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                             Size  First Load JS
+Ôöî Ôùï /                                76.7 kB         199 kB
+Ôö£ Ôùï /_not-found                          0 B         114 kB
+Ôö£ Ôùï /admin                           2.69 kB         158 kB
+Ôö£ Ôùï /admin/cron                      3.87 kB         160 kB
+Ôö£ Ôùï /admin/productos                 18.6 kB         174 kB
+Ôö£ Ôùï /admin/productos-sin-relacionar  3.25 kB         159 kB
+Ôö£ ãÆ /api/auth/login                      0 B            0 B
+Ôö£ ãÆ /api/con-precios                     0 B            0 B
+Ôö£ ãÆ /api/cron/history                    0 B            0 B
+Ôö£ ãÆ /api/cron/history/[id]               0 B            0 B
+Ôö£ ãÆ /api/diagnostics/novasoft            0 B            0 B
+Ôö£ ãÆ /api/productos/novasoft              0 B            0 B
+Ôö£ Ôùï /dashboard                       21.1 kB         167 kB
+Ôöö Ôùï /dashboard/inventory             21.1 kB         167 kB
++ First Load JS shared by all         132 kB
+  Ôö£ chunks/2008ffcf9e5b170c.js         13 kB
+  Ôö£ chunks/6c1d949039ca8e4a.js       75.4 kB
+  Ôö£ chunks/d510ab6172321f4e.css      17.2 kB
+  Ôöö other shared chunks (total)      26.2 kB
+
+
+ãÆ Middleware                           39 kB
+
+Ôùï  (Static)   prerendered as static content
+ãÆ  (Dynamic)  server-rendered on demand
+

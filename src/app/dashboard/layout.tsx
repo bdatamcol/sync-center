@@ -7,12 +7,10 @@ import { Button } from '@/components/ui/button';
 import { 
   BarChart3, 
   Package, 
-  Filter, 
   LogOut, 
   User,
   Building2,
-  TrendingUp,
-  Search
+  
 } from 'lucide-react';
 
 interface User {
