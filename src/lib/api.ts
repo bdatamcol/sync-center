@@ -1,9 +1,9 @@
 // Base URLs sourced from environment for flexibility (client-safe NEXT_PUBLIC vars)
-const API_BASE_URL = (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL)) || 'http://190.85.4.139:3000/api/auth';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL_BDATAM+'/auth';
 
 // Novasoft endpoints from env
-const NS_PRODUCTS_URL = (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_NS_PRODUCTS_URL || process.env.NS_PRODUCTS_URL)) || 'http://190.85.4.139:3000/api/productos/novasoft';
-const NS_PRICES_URL = (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_NS_PRICES_URL || process.env.NS_PRICES_URL)) || 'http://190.85.4.139:3000/api/con-precios';
+const NS_PRODUCTS_URL = process.env.NEXT_PUBLIC_API_URL_BDATAM+'/productos/novasoft';
+const NS_PRICES_URL = process.env.NEXT_PUBLIC_API_URL_BDATAM+'/con-precios';
 
 // WooCommerce API Configuration from env with safe defaults
 const WOOCOMMERCE_CONFIG = {
