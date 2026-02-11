@@ -115,6 +115,33 @@ export default function CronHistoryPage() {
     URL.revokeObjectURL(url)
   }
 
+  const handleExportDetailsCSV = () => {
+    if (!details || !details.results) return
+
+    const header = ["SKU", "Nombre", "Existencia", "Precio Anterior", "Precio Actual", "Estado", "Mensaje", "Error"]
+    const rows = details.results.map((r) => [
+      r.sku,
+      r.name,
+      r.existencia ?? "",
+      r.precioAnterior ?? "",
+      r.precioActual ?? "",
+      r.success ? "Éxito" : "Fallo",
+      r.message ?? "",
+      r.error ?? "",
+    ])
+
+    const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `cron_detalle_${details.id}.csv`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   const loadDetails = async (id: string) => {
     setSelectedId(id)
     setDetails(null)

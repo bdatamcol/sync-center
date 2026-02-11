@@ -100,9 +100,9 @@ async function ensureIndexes() {
 }
 
 // Novasoft API endpoints (can be overridden via environment variables)
-const NS_AUTH_URL = process.env.NS_AUTH_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://190.85.4.139:3000/api/auth';
-const NS_PRODUCTS_URL = process.env.NS_PRODUCTS_URL || process.env.NEXT_PUBLIC_NS_PRODUCTS_URL || 'http://190.85.4.139:3000/api/productos/novasoft';
-const NS_PRICES_URL = process.env.NS_PRICES_URL || process.env.NEXT_PUBLIC_NS_PRICES_URL || 'http://190.85.4.139:3000/api/con-precios';
+const NS_AUTH_URL = process.env.NS_AUTH_URL || 'http://192.168.1.32:8082/api/Authenticate';
+const NS_PRODUCTS_URL = process.env.NS_PRODUCTS_URL || 'http://192.168.1.32:8082/api/consultas/bodega-existencia';
+const NS_PRICES_URL = process.env.NS_PRICES_URL || 'http://192.168.1.32:8082/api/consultas/listas';
 
 // Utilidades de metadatos en WordPress (wp_postmeta)
 async function upsertMeta(conn, postId, key, value) {
@@ -292,54 +292,147 @@ async function loginNovasoft() {
   if (!username || !password) {
     throw new Error('Credenciales NOVASOFT no configuradas (NOVASOFT_USER, NOVASOFT_PASS)');
   }
+  
+  console.log(`[Login] Intentando autenticación con usuario: ${username} en ${NS_AUTH_URL}/login`);
+  
   const res = await fetch(`${NS_AUTH_URL}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
+  
+  const contentType = res.headers.get('content-type') || '';
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Login NOVASOFT falló: ${res.status} ${res.statusText} - ${text}`);
   }
-  const data = await res.json();
-  if (!data.token) throw new Error(data.message || data.error || 'No se recibió token de autenticación');
-  return data.token;
+  
+  let data;
+  if (contentType.includes('application/json')) {
+    data = await res.json();
+  } else {
+    const text = await res.text();
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      // Si es texto plano, asumimos que podría ser el token si es exitoso, pero usualmente es JSON
+      if (res.ok && text.length > 20) return text; 
+      data = { error: text };
+    }
+  }
+
+  // Extracción robusta del token
+  const token = data.token || data.accessToken || data.access_token;
+  
+  if (!token) {
+    console.error('[Login] Respuesta sin token:', JSON.stringify(data));
+    throw new Error(data.message || data.error || 'No se recibió token de autenticación en la estructura esperada');
+  }
+  
+  console.log('[Login] Autenticación exitosa.');
+  return token;
 }
 
 async function getProducts(token) {
-  const res = await fetch(NS_PRODUCTS_URL, {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Error obteniendo productos: ${res.status} ${res.statusText} - ${text}`);
-  }
-  const data = await res.json();
-  let products = [];
-  if (Array.isArray(data)) products = data;
-  else if (Array.isArray(data?.data)) products = data.data;
-  else if (Array.isArray(data?.productos)) products = data.productos;
-  else throw new Error('Estructura de respuesta inesperada de la API de productos');
-  return products;
+  let allProducts = [];
+  let page = 1;
+  let totalPages = 1;
+  const url = new URL(NS_PRODUCTS_URL);
+  
+  // Parámetros obligatorios
+  url.searchParams.append('sucursal', 'cuc');
+  url.searchParams.append('bodega', '080');
+  url.searchParams.append('empresa', 'cbb sas');
+
+  console.log(`[Productos] Iniciando descarga de inventario completo desde: ${url.origin}${url.pathname}`);
+
+  do {
+    url.searchParams.set('page', page.toString());
+    console.log(`[Productos] Consultando página ${page}...`);
+
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Error obteniendo productos página ${page}: ${res.status} ${res.statusText} - ${text}`);
+    }
+
+    const data = await res.json();
+    let pageProducts = [];
+    
+    if (data && typeof data === 'object') {
+       if (data.data && Array.isArray(data.data)) pageProducts = data.data;
+       else if (Array.isArray(data)) pageProducts = data;
+       else if (data.productos && Array.isArray(data.productos)) pageProducts = data.productos;
+       
+       if (data.total_pages && typeof data.total_pages === 'number') {
+         totalPages = data.total_pages;
+       }
+    } else {
+       throw new Error(`Estructura de respuesta inesperada en página ${page}`);
+    }
+    
+    console.log(`[Productos] Página ${page}: ${pageProducts.length} productos encontrados.`);
+    allProducts = allProducts.concat(pageProducts);
+    
+    page++;
+  } while (page <= totalPages);
+
+  console.log(`[Productos] Total productos descargados: ${allProducts.length}`);
+  return allProducts;
 }
 
 async function getPrices(token) {
-  const res = await fetch(NS_PRICES_URL, {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Error obteniendo precios: ${res.status} ${res.statusText} - ${text}`);
-  }
-  const data = await res.json();
-  let prices = [];
-  if (data?.success && Array.isArray(data?.data)) prices = data.data;
-  else if (Array.isArray(data)) prices = data;
-  else if (Array.isArray(data?.data)) prices = data.data;
-  else throw new Error('Estructura de respuesta inesperada del endpoint de precios');
-  return prices;
+  let allPrices = [];
+  let page = 1;
+  let totalPages = 1;
+  const url = new URL(NS_PRICES_URL);
+  
+  // Parámetros obligatorios
+  url.searchParams.append('sucursal', 'cuc');
+  url.searchParams.append('bodega', '080');
+
+  console.log(`[Precios] Iniciando descarga de listas de precios desde: ${url.origin}${url.pathname}`);
+
+  do {
+    url.searchParams.set('page', page.toString());
+    console.log(`[Precios] Consultando página ${page}...`);
+
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Error obteniendo precios página ${page}: ${res.status} ${res.statusText} - ${text}`);
+    }
+
+    const data = await res.json();
+    let pagePrices = [];
+    
+    if (data && typeof data === 'object') {
+      if (Array.isArray(data.data)) pagePrices = data.data;
+      else if (Array.isArray(data)) pagePrices = data;
+      
+      if (data.total_pages && typeof data.total_pages === 'number') {
+         totalPages = data.total_pages;
+      }
+    } else {
+       throw new Error(`Estructura de respuesta inesperada en precios página ${page}`);
+    }
+    
+    console.log(`[Precios] Página ${page}: ${pagePrices.length} precios encontrados.`);
+    allPrices = allPrices.concat(pagePrices);
+
+    page++;
+  } while (page <= totalPages);
+  
+  console.log(`[Precios] Total precios descargados: ${allPrices.length}`);
+  return allPrices;
 }
 
 function mergeProductsWithPrices(products, prices) {
