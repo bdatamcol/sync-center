@@ -71,12 +71,59 @@ export default function InventoryPage() {
   const formatNumber = (value: number) => 
     new Intl.NumberFormat('es-CO').format(value);
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return '';
     try {
-      return new Date(dateString).toLocaleDateString('es-ES');
-    } catch {
-      return dateString;
+      return new Date(dateString).toLocaleDateString('es-CO');
+    } catch (e) {
+      return dateString || '';
     }
+  };
+
+  const handleExportCSV = () => {
+    if (!filteredData || filteredData.length === 0) return;
+
+    const header = [
+      "Código",
+      "Descripción",
+      "Grupo",
+      "Marca",
+      "Ciudad",
+      "Bodega",
+      "Existencia",
+      "Valor",
+      "Última Compra",
+      "Días UC",
+      "Empresa"
+    ];
+
+    const rows = filteredData.map((item) => [
+      item.COD_ITEM,
+      item.DES_ITEM,
+      item.NOM_GRU,
+      item.DES_MAR,
+      item.ciudad,
+      item.NOM_BOD,
+      item.EXISTENCIA,
+      item.VALOR,
+      item.ult_comp ? formatDate(item.ult_comp) : '',
+      item.DiasUC,
+      item.empresa
+    ]);
+
+    const csv = [header, ...rows]
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `inventario_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -100,7 +147,12 @@ export default function InventoryPage() {
             <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
             Actualizar
           </Button>
-          <Button variant="outline" size="sm">
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={handleExportCSV}
+            disabled={!filteredData || filteredData.length === 0}
+          >
             <Download className="w-4 h-4 mr-2" />
             Exportar
           </Button>

@@ -141,6 +141,15 @@ export default function ProductosSinRelacionarPage() {
               className="max-w-sm border-primary/20 focus-visible:ring-primary/30"
             />
             <Button
+              onClick={handleExportCSV}
+              disabled={filtered.length === 0}
+              variant="outline"
+              className="gap-2 border-primary/20 hover:bg-primary/5 hover:border-primary/30 transition-all bg-transparent"
+            >
+              <Download className="h-4 w-4" />
+              Exportar
+            </Button>
+            <Button
               onClick={fetchData}
               disabled={loading}
               variant="outline"

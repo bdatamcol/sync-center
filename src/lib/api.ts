@@ -1,9 +1,9 @@
 // Base URLs sourced from environment for flexibility (client-safe NEXT_PUBLIC vars)
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL_BDATAM+'/auth';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/auth';
 
 // Novasoft endpoints from env
-const NS_PRODUCTS_URL = process.env.NEXT_PUBLIC_API_URL_BDATAM+'/productos/novasoft';
-const NS_PRICES_URL = process.env.NEXT_PUBLIC_API_URL_BDATAM+'/con-precios';
+const NS_PRODUCTS_URL = process.env.NEXT_PUBLIC_NS_PRODUCTS_URL || '/api/productos/novasoft';
+const NS_PRICES_URL = process.env.NEXT_PUBLIC_NS_PRICES_URL || '/api/con-precios';
 
 // WooCommerce API Configuration from env with safe defaults
 const WOOCOMMERCE_CONFIG = {

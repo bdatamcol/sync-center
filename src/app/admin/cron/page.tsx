@@ -349,12 +349,22 @@ export default function CronHistoryPage() {
             <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col">
               <div className="border-b border-gray-200 px-8 py-6 flex justify-between items-center bg-gradient-to-r from-blue-50 to-white rounded-t-2xl">
                 <h2 className="text-2xl font-bold text-gray-900">Detalles de ejecución</h2>
-                <button
-                  onClick={closeDetails}
-                  className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 transition-colors"
-                >
-                  <span className="text-2xl">×</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleExportDetailsCSV}
+                    className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors shadow-sm"
+                    title="Exportar detalles a CSV"
+                  >
+                    <Download className="w-4 h-4" />
+                    Exportar
+                  </button>
+                  <button
+                    onClick={closeDetails}
+                    className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 transition-colors"
+                  >
+                    <span className="text-2xl">×</span>
+                  </button>
+                </div>
               </div>
               <div className="p-8 space-y-6 overflow-auto flex-1">
                 {detailsLoading && (
