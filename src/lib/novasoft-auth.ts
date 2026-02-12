@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server';
 
 const AUTH_URL = process.env.NS_AUTH_URL || 'http://192.168.1.32:8082/api/Authenticate';
 const USER = process.env.NOVASOFT_USER || '';
@@ -7,6 +6,14 @@ const PASS = process.env.NOVASOFT_PASS || '';
 interface TokenInfo {
   token: string;
   expiresAt: number; // Timestamp in ms
+}
+
+interface AuthResponse {
+  token?: string;
+  accessToken?: string;
+  access_token?: string;
+  expires_at?: string;
+  expiresIn?: number;
 }
 
 let cachedTokenInfo: TokenInfo | null = null;
@@ -71,12 +78,16 @@ async function refreshToken(oldToken: string): Promise<string> {
   return parseAndCacheToken(data);
 }
 
-function parseAndCacheToken(data: any): string {
+function parseAndCacheToken(data: unknown): string {
   let token = null;
-  if (typeof data === 'string') token = data;
-  else if (data.token) token = data.token;
-  else if (data.accessToken) token = data.accessToken;
-  else if (data.access_token) token = data.access_token;
+  if (typeof data === 'string') {
+    token = data;
+  } else if (typeof data === 'object' && data !== null) {
+    const authData = data as AuthResponse;
+    if (authData.token) token = authData.token;
+    else if (authData.accessToken) token = authData.accessToken;
+    else if (authData.access_token) token = authData.access_token;
+  }
   
   if (!token) {
     throw new Error('No access token found in response');
@@ -84,14 +95,17 @@ function parseAndCacheToken(data: any): string {
 
   let expiresAt = Date.now() + 3600 * 1000; // Default 1 hour
   
-  if (data.expires_at) {
-    // Parse ISO string: "2026-02-13T13:23:03.149550"
-    const parsed = Date.parse(data.expires_at);
-    if (!isNaN(parsed)) {
-      expiresAt = parsed;
+  if (typeof data === 'object' && data !== null) {
+    const authData = data as AuthResponse;
+    if (authData.expires_at) {
+      // Parse ISO string: "2026-02-13T13:23:03.149550"
+      const parsed = Date.parse(authData.expires_at);
+      if (!isNaN(parsed)) {
+        expiresAt = parsed;
+      }
+    } else if (typeof authData.expiresIn === 'number') {
+      expiresAt = Date.now() + authData.expiresIn * 1000;
     }
-  } else if (typeof data.expiresIn === 'number') {
-    expiresAt = Date.now() + data.expiresIn * 1000;
   }
 
   cachedTokenInfo = { token, expiresAt };
