@@ -11,6 +11,7 @@ interface PricesApiResponse {
 interface PriceItem {
   cod_item: string;
   precioiva?: number;
+  cod_lis?: string;
   pre_vta?: number;
 }
 
@@ -69,16 +70,46 @@ export async function GET() {
     
     console.log(`[API Precios] Total precios descargados: ${allPrices.length}`);
 
-    const prices = allPrices.map((item) => {
+    // Agrupar precios por código de ítem
+    const groupedPrices = new Map<string, { 
+      codigo: string; 
+      precioActual: number; 
+      precioAnterior: number; 
+      existencia: number;
+    }>();
+
+    allPrices.forEach((item) => {
       const p = item as PriceItem;
-      return {
-        codigo: p.cod_item,
-        descripcion: '',
-        precioActual: p.precioiva || p.pre_vta,
-        precioAnterior: p.pre_vta,
-        existencia: 0
-      };
+      const code = p.cod_item?.trim();
+      
+      if (!code) return;
+
+      if (!groupedPrices.has(code)) {
+        groupedPrices.set(code, { 
+          codigo: code, 
+          precioActual: 0, 
+          precioAnterior: 0,
+          existencia: 0 
+        });
+      }
+      
+      const entry = groupedPrices.get(code)!;
+      const codLis = String(p.cod_lis || '');
+
+      // Precio Actual: cod_lis "05"
+      if (codLis === "05" && p.precioiva !== undefined) {
+        entry.precioActual = p.precioiva;
+      } 
+      // Precio Anterior: cod_lis "22"
+      else if (codLis === "22" && p.precioiva !== undefined) {
+        entry.precioAnterior = p.precioiva;
+      }
     });
+
+    const prices = Array.from(groupedPrices.values()).map(p => ({
+      ...p,
+      descripcion: ''
+    }));
 
     return NextResponse.json({ success: true, data: prices });
   } catch (err) {
