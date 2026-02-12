@@ -1,69 +1,13 @@
 import { NextResponse } from 'next/server';
+import { getNovasoftToken } from '@/lib/novasoft-auth';
 
-const AUTH_URL = process.env.NS_AUTH_URL || 'http://192.168.1.32:8082/api/Authenticate';
 const PRICES_URL = process.env.NS_PRICES_URL || 'http://192.168.1.32:8082/api/consultas/listas';
-const USER = process.env.NOVASOFT_USER || '';
-const PASS = process.env.NOVASOFT_PASS || '';
-
-// Cache simple en memoria
-let cachedToken: string | null = null;
-let tokenExpiresAt = 0;
-
-async function getToken(): Promise<string> {
-  const now = Date.now();
-  // Validar caché
-  if (cachedToken && tokenExpiresAt > now + 5000) {
-    return cachedToken;
-  }
-
-  console.log(`[API Precios] Iniciando login en: ${AUTH_URL}/login`);
-  console.log(`[API Precios] Usuario: ${USER}`);
-  
-  try {
-    const res = await fetch(`${AUTH_URL}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: USER, password: PASS })
-    });
-
-    if (!res.ok) {
-      const msg = await res.text();
-      console.error(`[API Precios] Error login: ${res.status} ${res.statusText} - ${msg}`);
-      throw new Error(`Login Novasoft falló (${res.status}): ${msg}`);
-    }
-
-    const data = await res.json();
-    console.log(`[API Precios] Login exitoso. Respuesta recibida.`);
-
-    // Extracción de token más robusta
-    let token = null;
-    if (typeof data === 'string') token = data;
-    else if (data.token) token = data.token;
-    else if (data.accessToken) token = data.accessToken;
-    else if (data.access_token) token = data.access_token;
-    
-    if (!token) {
-      console.error("[API Precios] No se encontró token en respuesta:", JSON.stringify(data));
-      throw new Error("No se recibió token válido en la respuesta de login");
-    }
-
-    cachedToken = token;
-    // Default 1 hora si no viene expiración
-    const ttlMs = (typeof data.expiresIn === 'number') ? data.expiresIn * 1000 : 3600 * 1000;
-    tokenExpiresAt = Date.now() + ttlMs;
-    
-    return cachedToken!;
-  } catch (error) {
-    console.error("[API Precios] Excepción en getToken:", error);
-    throw error;
-  }
-}
 
 export async function GET() {
   console.log("[API Precios] Iniciando petición GET /api/con-precios");
   
   try {
-    const token = await getToken();
+    const token = await getNovasoftToken();
     
     // Construir URL
     const url = new URL(PRICES_URL);
@@ -134,11 +78,32 @@ export async function GET() {
     
     console.log(`[API Precios] Total precios descargados: ${allPrices.length}`);
 
-    const prices = allPrices.map((item: any) => ({
-      codigo: item.cod_item,
+    // Agrupar precios por SKU
+    const pricesMap = new Map<string, { precioActual: number, precioAnterior: number }>();
+
+    allPrices.forEach((item: any) => {
+      const sku = item.cod_item?.trim();
+      if (!sku) return;
+
+      if (!pricesMap.has(sku)) {
+        pricesMap.set(sku, { precioActual: 0, precioAnterior: 0 });
+      }
+
+      const priceData = pricesMap.get(sku)!;
+
+      // Lógica de asignación de precios basada en cod_lis
+      if (item.cod_lis === '05') {
+        priceData.precioActual = item.precioiva;
+      } else if (item.cod_lis === '22') {
+        priceData.precioAnterior = item.precioiva;
+      }
+    });
+
+    const prices = Array.from(pricesMap.entries()).map(([sku, data]) => ({
+      codigo: sku,
       descripcion: '',
-      precioActual: item.precioiva || item.pre_vta,
-      precioAnterior: item.pre_vta,
+      precioActual: data.precioActual,
+      precioAnterior: data.precioAnterior,
       existencia: 0
     }));
 

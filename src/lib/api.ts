@@ -167,15 +167,17 @@ class ApiService {
       const data = await response.json();
       console.log('Auth response data:', data);
 
-      if (data.token) {
-        this.token = data.token;
+      const token = data.token || data.access_token || data.accessToken;
+
+      if (token) {
+        this.token = token;
         if (typeof window !== 'undefined') {
-          localStorage.setItem('token', data.token);
+          localStorage.setItem('token', token);
         }
         return {
           success: true,
-          token: data.token,
-          expiresIn: data.expiresIn,
+          token: token,
+          expiresIn: data.expiresIn || data.expires_at,
           user: data.user,
           message: data.message || 'Autenticación exitosa'
         };
@@ -943,13 +945,43 @@ class ApiService {
         in_stock: (product.existencia || 0) > 0
       };
 
-      // Actualizar precios si están disponibles
-      if (product.precioAnterior && product.precioAnterior > 0) {
-        updateData.regular_price = product.precioAnterior.toString();
+      // Lógica de precios robusta y formateo
+      const nsAnterior = Number(product.precioAnterior || 0); // Lista 22
+      const nsActual = Number(product.precioActual || 0);     // Lista 05
+      let expectedRegular = 0;
+      let expectedSale: number | undefined = undefined;
+      const hasAnterior = nsAnterior > 0;
+      const hasActual = nsActual > 0;
+
+      // Mapeo estricto según requerimiento del usuario:
+      // Regular Price = Lista 22 (precioAnterior)
+      // Sale Price = Lista 05 (precioActual)
+      // Nota: El usuario es consciente de que si Lista 05 > Lista 22, la oferta no tiene lógica,
+      // pero se requiere este mapeo para cuando los datos se corrijan en el ERP.
+
+      if (hasAnterior) {
+        expectedRegular = nsAnterior;
+        if (hasActual) {
+          expectedSale = nsActual;
+        }
+      } else if (hasActual) {
+        // Fallback: Si no hay precio de lista 22, usamos el de lista 05 como regular
+        expectedRegular = nsActual;
+      }
+
+      // Función auxiliar para formatear precios a string (sin decimales excesivos)
+      const formatPrice = (price: number) => Math.round(price).toString();
+
+      // Actualizar precios en WooCommerce
+      if (expectedRegular > 0) {
+        updateData.regular_price = formatPrice(expectedRegular);
       }
       
-      if (product.precioActual && product.precioActual > 0) {
-        updateData.sale_price = product.precioActual.toString();
+      // Manejo de sale_price
+      if (expectedSale !== undefined) {
+        updateData.sale_price = formatPrice(expectedSale);
+      } else {
+        updateData.sale_price = ''; // Borrar precio de oferta si no aplica
       }
 
       // Actualizar producto en WooCommerce

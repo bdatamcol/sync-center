@@ -286,7 +286,27 @@ async function getWpProductsCursorBatch(afterId, limit) {
   }
 }
 
+// Cache global para reutilización de token en ejecuciones persistentes
+let cachedToken = null;
+let tokenExpiresAt = 0;
+
 async function loginNovasoft() {
+  const now = Date.now();
+  // Si tenemos token y le quedan más de 5 minutos de vida, lo reusamos
+  if (cachedToken && tokenExpiresAt > now + 300000) {
+    return cachedToken;
+  }
+
+  // Si tenemos token pero expiró o va a expirar, intentamos refrescarlo
+  if (cachedToken) {
+    try {
+      console.log('[Auth] Token expirado o próximo a expirar, intentando refresco...');
+      return await refreshNovasoftToken(cachedToken);
+    } catch (e) {
+      console.warn('[Auth] Falló el refresco, reintentando login completo:', e.message);
+    }
+  }
+
   const username = process.env.NOVASOFT_USER;
   const password = process.env.NOVASOFT_PASS;
   if (!username || !password) {
@@ -301,35 +321,76 @@ async function loginNovasoft() {
     body: JSON.stringify({ username, password }),
   });
   
-  const contentType = res.headers.get('content-type') || '';
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Login NOVASOFT falló: ${res.status} ${res.statusText} - ${text}`);
   }
   
-  let data;
+  const data = await getJsonOrText(res);
+  return parseAndCacheToken(data);
+}
+
+async function refreshNovasoftToken(oldToken) {
+  console.log(`[Auth] Refrescando token en ${NS_AUTH_URL}/refresh`);
+  const res = await fetch(`${NS_AUTH_URL}/refresh`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${oldToken}`
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Refresh falló: ${res.status} - ${text}`);
+  }
+
+  const data = await getJsonOrText(res);
+  return parseAndCacheToken(data);
+}
+
+async function getJsonOrText(res) {
+  const contentType = res.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
-    data = await res.json();
+    return await res.json();
   } else {
     const text = await res.text();
     try {
-      data = JSON.parse(text);
+      return JSON.parse(text);
     } catch (e) {
-      // Si es texto plano, asumimos que podría ser el token si es exitoso, pero usualmente es JSON
+      // Si es texto plano, asumimos que podría ser el token si es exitoso
       if (res.ok && text.length > 20) return text; 
-      data = { error: text };
+      return { error: text };
     }
   }
+}
 
-  // Extracción robusta del token
-  const token = data.token || data.accessToken || data.access_token;
+function parseAndCacheToken(data) {
+  let token = null;
+  if (typeof data === 'string') token = data;
+  else if (data.token) token = data.token;
+  else if (data.accessToken) token = data.accessToken;
+  else if (data.access_token) token = data.access_token;
   
   if (!token) {
     console.error('[Login] Respuesta sin token:', JSON.stringify(data));
-    throw new Error(data.message || data.error || 'No se recibió token de autenticación en la estructura esperada');
+    throw new Error(data.message || data.error || 'No se recibió token de autenticación');
   }
   
-  console.log('[Login] Autenticación exitosa.');
+  cachedToken = token;
+  
+  // Default 1 hora
+  let expiresAt = Date.now() + 3600 * 1000;
+  
+  if (data.expires_at) {
+    const parsed = Date.parse(data.expires_at);
+    if (!isNaN(parsed)) expiresAt = parsed;
+  } else if (typeof data.expiresIn === 'number') {
+    expiresAt = Date.now() + data.expiresIn * 1000;
+  }
+  
+  tokenExpiresAt = expiresAt;
+  console.log(`[Auth] Token actualizado. Expira: ${new Date(expiresAt).toISOString()}`);
   return token;
 }
 

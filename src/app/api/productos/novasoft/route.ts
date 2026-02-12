@@ -1,61 +1,12 @@
 import { NextResponse } from 'next/server';
+import { getNovasoftToken } from '@/lib/novasoft-auth';
 
-const AUTH_URL = process.env.NS_AUTH_URL || 'http://192.168.1.32:8082/api/Authenticate';
 const PRODUCTS_URL = process.env.NS_PRODUCTS_URL || 'http://192.168.1.32:8082/api/consultas/bodega-existencia';
-const USER = process.env.NOVASOFT_USER || '';
-const PASS = process.env.NOVASOFT_PASS || '';
-
-// Cache simple
-let cachedToken: string | null = null;
-let tokenExpiresAt = 0;
-
-async function getToken(): Promise<string> {
-  const now = Date.now();
-  if (cachedToken && tokenExpiresAt > now + 5000) {
-    return cachedToken;
-  }
-
-  console.log(`[API Productos] Iniciando login en: ${AUTH_URL}/login`);
-
-  try {
-    const res = await fetch(`${AUTH_URL}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: USER, password: PASS })
-    });
-
-    if (!res.ok) {
-      const msg = await res.text();
-      console.error(`[API Productos] Error login: ${res.status} ${res.statusText} - ${msg}`);
-      throw new Error(`Login Novasoft falló (${res.status}): ${msg}`);
-    }
-
-    const data = await res.json();
-    let token = null;
-    if (typeof data === 'string') token = data;
-    else if (data.token) token = data.token;
-    else if (data.accessToken) token = data.accessToken;
-    else if (data.access_token) token = data.access_token;
-    
-    if (!token) {
-      console.error("[API Productos] No se encontró token en respuesta:", JSON.stringify(data));
-      throw new Error("No se recibió token válido en login");
-    }
-
-    cachedToken = token;
-    const ttlMs = (typeof data.expiresIn === 'number') ? data.expiresIn * 1000 : 3600 * 1000;
-    tokenExpiresAt = Date.now() + ttlMs;
-    return cachedToken!;
-  } catch (error) {
-    console.error("[API Productos] Excepción en getToken:", error);
-    throw error;
-  }
-}
 
 export async function GET() {
   console.log("[API Productos] Iniciando petición GET /api/productos/novasoft");
   try {
-    const token = await getToken();
+    const token = await getNovasoftToken();
     
     const url = new URL(PRODUCTS_URL);
     url.searchParams.append('sucursal', 'cuc');

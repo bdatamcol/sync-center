@@ -1324,17 +1324,19 @@ export default function ProductosPage() {
               {syncStatus === "error" && <AlertCircle className="h-4 w-4 text-red-500" />}
               Sincronización con WooCommerce
             </DialogTitle>
-            <DialogDescription>
-              {syncingProduct && (
-                <div className="space-y-2">
-                  <div>
-                    <strong>Producto:</strong> {syncingProduct.cod_item}
+            <DialogDescription asChild>
+              <div className="text-sm text-muted-foreground">
+                {syncingProduct && (
+                  <div className="space-y-2">
+                    <div>
+                      <strong>Producto:</strong> {syncingProduct.cod_item}
+                    </div>
+                    <div>
+                      <strong>Descripción:</strong> {syncingProduct.des_item}
+                    </div>
                   </div>
-                  <div>
-                    <strong>Descripción:</strong> {syncingProduct.des_item}
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </DialogDescription>
           </DialogHeader>
 
