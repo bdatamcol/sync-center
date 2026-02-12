@@ -497,12 +497,37 @@ async function getPrices(token) {
 }
 
 function mergeProductsWithPrices(products, prices) {
+  // Agrupar precios por código de ítem (lógica espejo de /api/con-precios/route.ts)
   const pricesMap = new Map();
-  for (const price of prices) {
-    if (price && price.codigo != null) {
-      pricesMap.set(String(price.codigo).trim(), price);
+  
+  for (const p of prices) {
+    const code = p.cod_item ? String(p.cod_item).trim() : null;
+    if (!code) continue;
+
+    if (!pricesMap.has(code)) {
+      pricesMap.set(code, { 
+        precioActual: 0, 
+        precioAnterior: 0,
+        existencia: 0 
+      });
+    }
+    
+    const entry = pricesMap.get(code);
+    const codLis = String(p.cod_lis || '').trim();
+    const precio = Number(p.precioiva);
+
+    if (!isNaN(precio)) {
+      // Precio Actual: cod_lis "05" o "5"
+      if (codLis === "05" || codLis === "5") {
+        entry.precioActual = precio;
+      } 
+      // Precio Anterior: cod_lis "22"
+      else if (codLis === "22") {
+        entry.precioAnterior = precio;
+      }
     }
   }
+
   return products.map((product) => {
     const code = product.cod_item?.trim();
     const priceData = code ? pricesMap.get(code) : null;
@@ -511,7 +536,9 @@ function mergeProductsWithPrices(products, prices) {
         ...product,
         precioAnterior: priceData.precioAnterior,
         precioActual: priceData.precioActual,
-        existencia: priceData.existencia ?? product.existencia,
+        // Nota: la existencia viene del endpoint de productos, no de precios, 
+        // pero si viniera de precios se podría usar:
+        // existencia: priceData.existencia ?? product.existencia,
       };
     }
     return product;
@@ -596,17 +623,82 @@ async function syncAllProductsOptimized(products) {
         const currentStatus = wp.status || PRODUCT_STATUS.DRAFT;
         let newStatus = determineProductStatus(nsStock);
         if (!wp.has_image) newStatus = PRODUCT_STATUS.DRAFT;
-        const update = {
-          id: wp.id,
-          nsStock,
-          regular_price: (ns.precioAnterior && ns.precioAnterior > 0) ? String(ns.precioAnterior) : undefined,
-          sale_price: (ns.precioActual && ns.precioActual > 0) ? String(ns.precioActual) : undefined,
-          status: currentStatus !== newStatus ? newStatus : undefined,
+
+        // Lógica de precios unificada con api.ts
+        const nsAnterior = Number(ns.precioAnterior || 0);
+        const nsActual = Number(ns.precioActual || 0);
+        let expectedRegular = 0;
+        let expectedSale = undefined;
+        
+        const hasAnterior = nsAnterior > 0;
+        const hasActual = nsActual > 0;
+
+        if (hasAnterior && hasActual) {
+            expectedRegular = nsAnterior;
+            expectedSale = nsActual;
+        } else if (hasActual) {
+            expectedRegular = nsActual;
+        } else if (hasAnterior) {
+            expectedRegular = nsAnterior;
+        }
+
+        // Formateo y redondeo
+        const fmt = (n) => String(Math.round(n));
+        const newRegular = expectedRegular > 0 ? fmt(expectedRegular) : undefined;
+        const newSale = expectedSale !== undefined ? fmt(expectedSale) : '';
+
+        // Comparar con valores actuales de WP para minimizar escrituras
+        // wp.regular_price y wp.sale_price vienen de la DB como strings
+        const currentRegular = wp.regular_price || '';
+        const currentSale = wp.sale_price || '';
+
+        // Solo actualizar si difiere (comparando redondeados si es posible, o strings directos)
+        // Nota: newRegular viene redondeado. currentRegular podría tener decimales .00
+        const isDifferent = (a, b) => {
+            if (!a && !b) return false;
+            if (!a || !b) return true;
+            return Math.round(Number(a)) !== Math.round(Number(b));
         };
-        if (update.status === PRODUCT_STATUS.DRAFT) statusChanges.toDraft++;
-        else if (update.status === PRODUCT_STATUS.PUBLISH) statusChanges.toPublish++;
-        updatesBatch.push(update);
+
+        let priceChanged = false;
+
+        if (newRegular !== undefined && isDifferent(currentRegular, newRegular)) {
+            priceChanged = true;
+        }
+
+        // Para sale price: si newSale es '' y currentSale tiene valor, actualizar a ''.
+        // Si newSale tiene valor y es diferente, actualizar.
+        if (newSale === '') {
+            if (currentSale !== '') priceChanged = true;
+        } else {
+            if (isDifferent(currentSale, newSale)) priceChanged = true;
+        }
+
+        // Si stock cambia
+        const currentStock = Number(wp.stock_quantity || 0);
+        
+        // Verificar si hay algún cambio real
+        const stockChanged = currentStock !== nsStock;
+        const statusChanged = currentStatus !== newStatus;
+
+        if (stockChanged || statusChanged || priceChanged) {
+            // Aseguramos que regular_price tenga un valor válido para la actualización
+            // Si newRegular es undefined (Novasoft devolvió 0 o no devolvió), mantenemos el actual
+            const finalRegular = newRegular !== undefined ? newRegular : currentRegular;
+            
+            const update = {
+                id: wp.id,
+                nsStock,
+                regular_price: finalRegular,
+                sale_price: newSale,
+                status: statusChanged ? newStatus : undefined,
+            };
+            if (update.status === PRODUCT_STATUS.DRAFT) statusChanges.toDraft++;
+            else if (update.status === PRODUCT_STATUS.PUBLISH) statusChanges.toPublish++;
+            updatesBatch.push(update);
+        }
       } else {
+        // ... (resto del código para productos no encontrados en NS)
         updatesBatch.push({
           id: wp.id,
           nsStock: 0,

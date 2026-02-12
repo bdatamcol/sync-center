@@ -68,8 +68,8 @@ export async function GET() {
       page++;
     } while (page <= totalPages);
     
-    console.log(`[API Precios] Total precios descargados: ${allPrices.length}`);
-
+    // console.log(`[API Precios] Total precios descargados: ${allPrices.length}`);
+    
     // Agrupar precios por código de ítem
     const groupedPrices = new Map<string, { 
       codigo: string; 
@@ -94,10 +94,10 @@ export async function GET() {
       }
       
       const entry = groupedPrices.get(code)!;
-      const codLis = String(p.cod_lis || '');
+      const codLis = String(p.cod_lis || '').trim();
 
-      // Precio Actual: cod_lis "05"
-      if (codLis === "05" && p.precioiva !== undefined) {
+      // Precio Actual: cod_lis "05" o "5"
+      if ((codLis === "05" || codLis === "5") && p.precioiva !== undefined) {
         entry.precioActual = p.precioiva;
       } 
       // Precio Anterior: cod_lis "22"
@@ -106,12 +106,10 @@ export async function GET() {
       }
     });
 
-    const prices = Array.from(groupedPrices.values()).map(p => ({
-      ...p,
-      descripcion: ''
-    }));
-
-    return NextResponse.json({ success: true, data: prices });
+    return NextResponse.json({
+      success: true,
+      data: Array.from(groupedPrices.values()),
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'Error desconocido';

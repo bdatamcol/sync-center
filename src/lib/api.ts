@@ -1213,15 +1213,17 @@ class ApiService {
       const nsStock = Number(p.existencia || 0);
       const inStock = nsStock > 0;
 
+      // Lógica de precios unificada y robusta
       const nsAnterior = Number(p.precioAnterior || 0);
       const nsActual = Number(p.precioActual || 0);
       let expectedRegular = 0;
       let expectedSale: number | undefined = undefined;
       const hasAnterior = nsAnterior > 0;
       const hasActual = nsActual > 0;
+      
       if (hasAnterior && hasActual) {
         expectedRegular = nsAnterior;
-        if (nsActual < nsAnterior) expectedSale = nsActual;
+        expectedSale = nsActual;
       } else if (hasActual) {
         expectedRegular = nsActual;
       } else if (hasAnterior) {
@@ -1231,29 +1233,41 @@ class ApiService {
       const upd: Partial<WooCommerceProduct> & { id: number } = { id: w.id };
       let changed = false;
 
+      // Función auxiliar para redondear (igual que en sync individual)
+      const formatPrice = (price: number) => Math.round(price).toString();
+
       if (!w.manage_stock) { upd.manage_stock = true; changed = true; }
       const wcStock = Number(w.stock_quantity ?? 0);
       if (wcStock !== nsStock) { upd.stock_quantity = nsStock; changed = true; }
       const wcInStock = !!w.in_stock;
       if (wcInStock !== inStock) { upd.in_stock = inStock; changed = true; }
 
-      const wcRegular = Number(w.regular_price || 0);
-      if (expectedRegular > 0 && wcRegular !== expectedRegular) {
-        upd.regular_price = String(expectedRegular);
-        changed = true;
+      // Comparación de precios para determinar si hay cambios
+      const newRegular = expectedRegular > 0 ? formatPrice(expectedRegular) : undefined;
+      const newSale = expectedSale !== undefined ? formatPrice(expectedSale) : '';
+      
+      const currentRegular = w.regular_price || '';
+      const currentSale = w.sale_price || '';
+      
+      const isDifferent = (a: string | number, b: string | number) => Math.round(Number(a || 0)) !== Math.round(Number(b || 0));
+      
+      let priceChanged = false;
+      
+      // Verificar cambios en regular_price
+      if (newRegular !== undefined && isDifferent(currentRegular, newRegular)) priceChanged = true;
+      
+      // Verificar cambios en sale_price
+      if (newSale === '') {
+        if (currentSale !== '') priceChanged = true;
+      } else {
+        if (isDifferent(currentSale, newSale)) priceChanged = true;
       }
 
-      const wcSaleRaw = (w.sale_price ?? '').toString();
-      const wcSalePresent = wcSaleRaw.trim() !== '';
-      const wcSale = wcSalePresent ? Number(wcSaleRaw) : undefined;
-
-      if (expectedSale === undefined) {
-        if (wcSalePresent) { upd.sale_price = ''; changed = true; }
-      } else {
-        if (!wcSalePresent || wcSale !== expectedSale) {
-          upd.sale_price = String(expectedSale);
-          changed = true;
-        }
+      // Si hay CUALQUIER cambio de precio, enviamos AMBOS para asegurar consistencia
+      if (priceChanged) {
+        if (newRegular !== undefined) upd.regular_price = newRegular;
+        upd.sale_price = newSale;
+        changed = true;
       }
 
       if (changed) diffs.push(upd);
