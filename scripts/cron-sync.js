@@ -307,49 +307,115 @@ async function loginNovasoft() {
   return token;
 }
 
-async function getProducts(token) {
-  const res = await fetch(NS_PRODUCTS_URL, {
+async function fetchPage(url, token, params = {}) {
+  const targetUrl = new URL(url);
+  Object.keys(params).forEach(key => targetUrl.searchParams.append(key, params[key]));
+  
+  const res = await fetch(targetUrl.toString(), {
     method: 'GET',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
   });
+
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Error obteniendo productos: ${res.status} ${res.statusText} - ${text}`);
+    throw new Error(`Error obteniendo datos de ${url}: ${res.status} ${res.statusText} - ${text}`);
   }
-  const data = await res.json();
-  let products = [];
-  if (Array.isArray(data)) products = data;
-  else if (Array.isArray(data?.data)) products = data.data;
-  else if (Array.isArray(data?.productos)) products = data.productos;
-  else throw new Error('Estructura de respuesta inesperada de la API de productos');
-  return products;
+
+  const contentType = res.headers.get('content-type') || '';
+  return contentType.includes('application/json') ? await res.json() : JSON.parse(await res.text());
+}
+
+async function getProducts(token) {
+  let allProducts = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const params = {
+      sucursal: 'cuc',
+      bodega: '080',
+      empresa: 'cbb sas',
+      page: String(page)
+    };
+
+    const data = await fetchPage(NS_PRODUCTS_URL, token, params);
+    
+    let pageItems = [];
+    if (Array.isArray(data)) pageItems = data;
+    else if (Array.isArray(data?.data)) pageItems = data.data;
+    else if (Array.isArray(data?.productos)) pageItems = data.productos;
+    
+    if (data.total_pages && typeof data.total_pages === 'number') {
+      totalPages = data.total_pages;
+    }
+
+    allProducts = allProducts.concat(pageItems);
+    page++;
+  } while (page <= totalPages);
+
+  return allProducts;
 }
 
 async function getPrices(token) {
-  const res = await fetch(NS_PRICES_URL, {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Error obteniendo precios: ${res.status} ${res.statusText} - ${text}`);
-  }
-  const data = await res.json();
-  let prices = [];
-  if (data?.success && Array.isArray(data?.data)) prices = data.data;
-  else if (Array.isArray(data)) prices = data;
-  else if (Array.isArray(data?.data)) prices = data.data;
-  else throw new Error('Estructura de respuesta inesperada del endpoint de precios');
-  return prices;
+  let allPrices = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const params = {
+      sucursal: 'cuc',
+      bodega: '080',
+      page: String(page)
+    };
+
+    const data = await fetchPage(NS_PRICES_URL, token, params);
+    
+    let pageItems = [];
+    if (data?.success && Array.isArray(data?.data)) pageItems = data.data;
+    else if (Array.isArray(data)) pageItems = data;
+    else if (Array.isArray(data?.data)) pageItems = data.data;
+
+    if (data.total_pages && typeof data.total_pages === 'number') {
+      totalPages = data.total_pages;
+    }
+
+    allPrices = allPrices.concat(pageItems);
+    page++;
+  } while (page <= totalPages);
+
+  return allPrices;
 }
 
 function mergeProductsWithPrices(products, prices) {
+  // Transformation logic: Group by cod_item and pivot prices
   const pricesMap = new Map();
-  for (const price of prices) {
-    if (price && price.codigo != null) {
-      pricesMap.set(String(price.codigo).trim(), price);
+  
+  // First pass: aggregate raw prices by product code
+  for (const item of prices) {
+    const code = item.cod_item ? String(item.cod_item).trim() : '';
+    if (!code) continue;
+
+    if (!pricesMap.has(code)) {
+      pricesMap.set(code, {
+        precioAnterior: 0,
+        precioActual: 0,
+        existencia: 0 // API de precios no trae existencia
+      });
+    }
+    
+    const entry = pricesMap.get(code);
+    // Usar precioiva como precio final
+    const precio = Number(item.precioiva || 0);
+    const codLis = String(item.cod_lis || '').trim();
+
+    if (codLis === '05' || codLis === '5') {
+      entry.precioActual = precio;
+    } else if (codLis === '22') {
+      entry.precioAnterior = precio;
     }
   }
+
+  // Second pass: merge with products
   return products.map((product) => {
     const code = product.cod_item?.trim();
     const priceData = code ? pricesMap.get(code) : null;
@@ -358,7 +424,8 @@ function mergeProductsWithPrices(products, prices) {
         ...product,
         precioAnterior: priceData.precioAnterior,
         precioActual: priceData.precioActual,
-        existencia: priceData.existencia ?? product.existencia,
+        // Existencia viene del producto (stock endpoint), no de precios
+        existencia: product.existencia,
       };
     }
     return product;

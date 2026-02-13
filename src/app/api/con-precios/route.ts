@@ -47,45 +47,82 @@ async function getToken(): Promise<string> {
   return cachedToken!;
 }
 
+async function fetchPage(token: string, baseUrl: string, params: URLSearchParams) {
+    const url = new URL(baseUrl);
+    params.forEach((value, key) => url.searchParams.append(key, value));
+    
+    const res = await fetch(url.toString(), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+
+    if (!res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+        throw new Error(`Error obteniendo precios (${res.status}): ${JSON.stringify(payload)}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    const data = contentType.includes('application/json') ? await res.json() : JSON.parse(await res.text());
+    return data;
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const token = await getToken();
 
-    const targetUrl = new URL(PRICES_URL);
-    
     // Default params
-    if (!searchParams.has('sucursal')) targetUrl.searchParams.append('sucursal', 'cuc');
-    if (!searchParams.has('bodega')) targetUrl.searchParams.append('bodega', '080');
-    if (!searchParams.has('page')) targetUrl.searchParams.append('page', '1');
-
-    searchParams.forEach((value, key) => {
-        targetUrl.searchParams.set(key, value);
-    });
-
-    const res = await fetch(targetUrl.toString(), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-    });
-
-    const contentType = res.headers.get('content-type') || '';
-    if (!res.ok) {
-      const payload = contentType.includes('application/json') ? await res.json() : await res.text();
-      return NextResponse.json({ success: false, error: 'Error obteniendo precios', details: payload }, { status: res.status });
-    }
-
-    const rawData = contentType.includes('application/json') ? await res.json() : JSON.parse(await res.text());
+    const baseParams = new URLSearchParams();
+    if (!searchParams.has('sucursal')) baseParams.append('sucursal', 'cuc');
+    if (!searchParams.has('bodega')) baseParams.append('bodega', '080');
     
-    let items: any[] = [];
-    if (rawData && typeof rawData === 'object') {
-        if (Array.isArray(rawData.data)) items = rawData.data;
-        else if (Array.isArray(rawData)) items = rawData;
+    // Merge user params
+    searchParams.forEach((value, key) => {
+        baseParams.set(key, value);
+    });
+
+    let allRawItems: any[] = [];
+    let firstResponseData: any = null;
+
+    // If 'page' is explicitly requested, fetch only that page
+    if (searchParams.has('page')) {
+        const data = await fetchPage(token, PRICES_URL, baseParams);
+        firstResponseData = data;
+        if (data && typeof data === 'object') {
+            if (Array.isArray(data.data)) allRawItems = data.data;
+            else if (Array.isArray(data)) allRawItems = data;
+        }
+    } else {
+        // Fetch ALL pages
+        let page = 1;
+        let totalPages = 1;
+
+        do {
+            baseParams.set('page', String(page));
+            const data = await fetchPage(token, PRICES_URL, baseParams);
+            
+            if (page === 1) firstResponseData = data;
+
+            let pageItems: any[] = [];
+            if (data && typeof data === 'object') {
+                if (Array.isArray(data.data)) pageItems = data.data;
+                else if (Array.isArray(data)) pageItems = data;
+                
+                if (data.total_pages && typeof data.total_pages === 'number') {
+                    totalPages = data.total_pages;
+                }
+            }
+            
+            allRawItems = allRawItems.concat(pageItems);
+            page++;
+        } while (page <= totalPages);
     }
 
     // Transformation logic: Group by cod_item and pivot prices
     const pricesMap = new Map();
     
-    items.forEach((item: any) => {
+    allRawItems.forEach((item: any) => {
         const code = item.cod_item ? String(item.cod_item).trim() : '';
         if (!code) return;
 
@@ -116,10 +153,10 @@ export async function GET(req: Request) {
     return NextResponse.json({
         success: true,
         data: transformedData,
-        // Preserve pagination info if available
-        page: rawData.page,
-        total_pages: rawData.total_pages,
-        total_rows: rawData.total_rows
+        // Preserve pagination info if available (fake if aggregated)
+        page: 1,
+        total_pages: 1,
+        total_rows: transformedData.length
     }, { status: 200 });
 
   } catch (err) {

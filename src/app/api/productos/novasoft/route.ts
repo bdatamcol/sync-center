@@ -51,45 +51,88 @@ async function getToken(): Promise<string> {
   return cachedToken!;
 }
 
+async function fetchPage(token: string, baseUrl: string, params: URLSearchParams) {
+    const url = new URL(baseUrl);
+    params.forEach((value, key) => url.searchParams.append(key, value));
+    
+    const res = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+
+    if (!res.ok) {
+        throw new Error(`Error ${res.status}: ${res.statusText}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    const data = contentType.includes('application/json') ? await res.json() : await res.text();
+    return typeof data === 'string' ? { raw: data } : data;
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const token = await getToken();
     
-    // Forward query parameters with defaults
-    const targetUrl = new URL(PRODUCTS_URL);
+    // Default params logic
+    const baseParams = new URLSearchParams();
+    if (!searchParams.has('sucursal')) baseParams.append('sucursal', 'cuc');
+    if (!searchParams.has('bodega')) baseParams.append('bodega', '080');
+    if (!searchParams.has('empresa')) baseParams.append('empresa', 'cbb sas');
     
-    // Default params
-    if (!searchParams.has('sucursal')) targetUrl.searchParams.append('sucursal', 'cuc');
-    if (!searchParams.has('bodega')) targetUrl.searchParams.append('bodega', '080');
-    if (!searchParams.has('empresa')) targetUrl.searchParams.append('empresa', 'cbb sas');
-    if (!searchParams.has('page')) targetUrl.searchParams.append('page', '1');
-
+    // Merge user params (override defaults if present)
     searchParams.forEach((value, key) => {
-        // Overwrite or append? URLSearchParams append by default. 
-        // We should delete defaults if user provided them, or just use set.
-        // Let's use set to enforce user provided values if present, or defaults if not.
-        targetUrl.searchParams.set(key, value);
-    });
-    
-    const res = await fetch(targetUrl.toString(), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
+        baseParams.set(key, value);
     });
 
-    const contentType = res.headers.get('content-type') || '';
-    if (!res.ok) {
-      const payload = contentType.includes('application/json') ? await res.json() : await res.text();
-      return NextResponse.json({ success: false, error: 'Error obteniendo productos', details: payload }, { status: res.status });
+    // If 'page' is explicitly requested, we just return that page
+    if (searchParams.has('page')) {
+        const data = await fetchPage(token, PRODUCTS_URL, baseParams);
+        return NextResponse.json(data, { status: 200 });
     }
 
-    const data = contentType.includes('application/json') ? await res.json() : await res.text();
-    // Normalizar a JSON si fuera texto
-    const body = typeof data === 'string' ? { raw: data } : data;
-    return NextResponse.json(body, { status: 200 });
+    // Otherwise, we fetch ALL pages
+    let allItems: any[] = [];
+    let page = 1;
+    let totalPages = 1;
+    let firstResponseData: any = null;
+
+    do {
+        baseParams.set('page', String(page));
+        const data = await fetchPage(token, PRODUCTS_URL, baseParams);
+        
+        if (page === 1) firstResponseData = data;
+
+        let pageItems: any[] = [];
+        if (data && typeof data === 'object') {
+            if (Array.isArray(data.data)) pageItems = data.data;
+            else if (Array.isArray(data)) pageItems = data;
+            else if (data.productos && Array.isArray(data.productos)) pageItems = data.productos;
+            
+            if (data.total_pages && typeof data.total_pages === 'number') {
+                totalPages = data.total_pages;
+            }
+        }
+        
+        allItems = allItems.concat(pageItems);
+        page++;
+    } while (page <= totalPages);
+
+    // Return combined result, preserving metadata structure of the first response if possible
+    const result = {
+        ...firstResponseData,
+        data: allItems,
+        page: 1,
+        total_pages: 1,
+        rows: allItems.length,
+        total_rows: allItems.length
+    };
+
+    return NextResponse.json(result, { status: 200 });
+
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error desconocido';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
