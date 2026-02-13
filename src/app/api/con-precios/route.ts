@@ -1,124 +1,53 @@
 import { NextResponse } from 'next/server';
-import { getNovasoftToken } from '@/lib/novasoft-auth';
 
-const PRICES_URL = process.env.NS_PRICES_URL || 'http://192.168.1.32:8082/api/consultas/listas';
+const AUTH_URL = process.env.NS_AUTH_URL || process.env.API_BASE_URL || 'http://190.85.4.139:3000/api/auth';
+const PRICES_URL = process.env.NS_PRICES_URL || 'http://190.85.4.139:3000/api/con-precios';
+const USER = process.env.NOVASOFT_USER || '';
+const PASS = process.env.NOVASOFT_PASS || '';
 
-interface PricesApiResponse {
-  data?: unknown[];
-  total_pages?: number;
-}
+let cachedToken: string | null = null;
+let tokenExpiresAt = 0;
 
-interface PriceItem {
-  cod_item: string;
-  precioiva?: number;
-  cod_lis?: string;
-  pre_vta?: number;
+async function getToken(): Promise<string> {
+  const now = Date.now();
+  if (cachedToken && tokenExpiresAt > now + 5000) return cachedToken;
+
+  const res = await fetch(`${AUTH_URL}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: PASS })
+  });
+
+  if (!res.ok) {
+    const details = await res.text();
+    throw new Error(`Login Novasoft falló (${res.status}): ${details}`);
+  }
+
+  const data = await res.json();
+  cachedToken = data.token;
+  const ttlMs = typeof data.expiresIn === 'number' ? data.expiresIn * 1000 : 60 * 60 * 1000;
+  tokenExpiresAt = Date.now() + ttlMs;
+  return cachedToken!;
 }
 
 export async function GET() {
   try {
-    const token = await getNovasoftToken();
-    
-    // Construir URL
-    const url = new URL(PRICES_URL);
-    url.searchParams.append('sucursal', 'cuc');
-    url.searchParams.append('bodega', '080');
-
-    const allPrices: unknown[] = [];
-    let page = 1;
-    let totalPages = 1;
-
-    do {
-      url.searchParams.set('page', page.toString());
-
-      const res = await fetch(url.toString(), {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!res.ok) {
-        const payload = await res.text();
-        return NextResponse.json(
-          { success: false, error: payload },
-          { status: res.status }
-        );
-      }
-
-      const raw: unknown = await res.json();
-
-      let pageData: unknown[] = [];
-
-      if (typeof raw === 'object' && raw !== null) {
-        const data = raw as PricesApiResponse;
-
-        if (Array.isArray(data.data)) {
-          pageData = data.data;
-        } else if (Array.isArray(raw)) {
-          pageData = raw;
-        }
-
-        if (typeof data.total_pages === 'number') {
-          totalPages = data.total_pages;
-        }
-      }
-
-      allPrices.push(...pageData);
-      page++;
-    } while (page <= totalPages);
-    
-    // console.log(`[API Precios] Total precios descargados: ${allPrices.length}`);
-    
-    // Agrupar precios por código de ítem
-    const groupedPrices = new Map<string, { 
-      codigo: string; 
-      precioActual: number; 
-      precioAnterior: number; 
-      existencia: number;
-    }>();
-
-    allPrices.forEach((item) => {
-      const p = item as PriceItem;
-      const code = p.cod_item?.trim();
-      
-      if (!code) return;
-
-      if (!groupedPrices.has(code)) {
-        groupedPrices.set(code, { 
-          codigo: code, 
-          precioActual: 0, 
-          precioAnterior: 0,
-          existencia: 0 
-        });
-      }
-      
-      const entry = groupedPrices.get(code)!;
-      const codLis = String(p.cod_lis || '').trim();
-
-      // Precio Actual: cod_lis "05" o "5"
-      if ((codLis === "05" || codLis === "5") && p.precioiva !== undefined) {
-        entry.precioActual = p.precioiva;
-      } 
-      // Precio Anterior: cod_lis "22"
-      else if (codLis === "22" && p.precioiva !== undefined) {
-        entry.precioAnterior = p.precioiva;
-      }
+    const token = await getToken();
+    const res = await fetch(PRICES_URL, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
     });
 
-    return NextResponse.json({
-      success: true,
-      data: Array.from(groupedPrices.values()),
-    });
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok) {
+      const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+      return NextResponse.json({ success: false, error: 'Error obteniendo precios', details: payload }, { status: res.status });
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data, { status: 200 });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Error desconocido';
-    
-    console.error('[API Precios] Error:', message);
-
-    return NextResponse.json(
-      { success: false, error: message },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : 'Error desconocido';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }

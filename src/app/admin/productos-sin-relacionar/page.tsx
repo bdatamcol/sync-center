@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { RefreshCw, Copy, Package, ShoppingCart, AlertCircle, Download } from "lucide-react"
+import { RefreshCw, Copy, Package, ShoppingCart, AlertCircle } from "lucide-react"
 import { apiService, type Product, type WooCommerceProduct } from "@/lib/api"
 
 export default function ProductosSinRelacionarPage() {
@@ -65,34 +65,6 @@ export default function ProductosSinRelacionarPage() {
       setCopiedSku(sku)
       setTimeout(() => setCopiedSku(null), 2000)
     } catch {}
-  }
-
-  const handleExportCSV = () => {
-    if (filtered.length === 0) return
-
-    const header = ["ID", "SKU", "Nombre", "Estado", "Stock", "Precio Regular", "Precio Oferta"]
-    const rows = filtered.map((p) => [
-      p.id,
-      p.sku || "",
-      p.name || "",
-      p.status || "",
-      p.manage_stock ? (p.stock_quantity ?? 0) : "N/A",
-      p.regular_price || "",
-      p.sale_price || "",
-    ])
-
-    const csv = [header, ...rows]
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `productos_sin_relacionar_${Date.now()}.csv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
   }
 
   return (
@@ -168,15 +140,6 @@ export default function ProductosSinRelacionarPage() {
               onChange={(e) => setSearch(e.target.value)}
               className="max-w-sm border-primary/20 focus-visible:ring-primary/30"
             />
-            <Button
-              onClick={handleExportCSV}
-              disabled={filtered.length === 0 || loading}
-              variant="outline"
-              className="gap-2 border-primary/20 hover:bg-primary/5 hover:border-primary/30 transition-all bg-transparent"
-            >
-              <Download className="h-4 w-4" />
-              Exportar
-            </Button>
             <Button
               onClick={fetchData}
               disabled={loading}

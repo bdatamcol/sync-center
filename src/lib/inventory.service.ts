@@ -57,7 +57,7 @@ export interface InventoryResponse {
 }
 
 class InventoryService {
-  private baseUrl = process.env.NEXT_PUBLIC_API_URL_BDATAM + '/inventario';
+  private baseUrl = process.env.NEXT_PUBLIC_NS_PRODUCTS_URL || '/api/productos/novasoft';
   private filtersCacheKey = 'inventory_filters_cache_v1';
   private filtersCacheTTLMs = 24 * 60 * 60 * 1000; // 24h
 

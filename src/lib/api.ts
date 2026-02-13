@@ -167,7 +167,7 @@ class ApiService {
       const data = await response.json();
       console.log('Auth response data:', data);
 
-      const token = data.token || data.access_token || data.accessToken;
+      const token = data.token || data.accessToken || data.access_token;
 
       if (token) {
         this.token = token;
@@ -945,43 +945,13 @@ class ApiService {
         in_stock: (product.existencia || 0) > 0
       };
 
-      // Lógica de precios robusta y formateo
-      const nsAnterior = Number(product.precioAnterior || 0); // Lista 22
-      const nsActual = Number(product.precioActual || 0);     // Lista 05
-      let expectedRegular = 0;
-      let expectedSale: number | undefined = undefined;
-      const hasAnterior = nsAnterior > 0;
-      const hasActual = nsActual > 0;
-
-      // Mapeo estricto según requerimiento del usuario:
-      // Regular Price = Lista 22 (precioAnterior)
-      // Sale Price = Lista 05 (precioActual)
-      // Nota: El usuario es consciente de que si Lista 05 > Lista 22, la oferta no tiene lógica,
-      // pero se requiere este mapeo para cuando los datos se corrijan en el ERP.
-
-      if (hasAnterior) {
-        expectedRegular = nsAnterior;
-        if (hasActual) {
-          expectedSale = nsActual;
-        }
-      } else if (hasActual) {
-        // Fallback: Si no hay precio de lista 22, usamos el de lista 05 como regular
-        expectedRegular = nsActual;
-      }
-
-      // Función auxiliar para formatear precios a string (sin decimales excesivos)
-      const formatPrice = (price: number) => Math.round(price).toString();
-
-      // Actualizar precios en WooCommerce
-      if (expectedRegular > 0) {
-        updateData.regular_price = formatPrice(expectedRegular);
+      // Actualizar precios si están disponibles
+      if (product.precioAnterior && product.precioAnterior > 0) {
+        updateData.regular_price = product.precioAnterior.toString();
       }
       
-      // Manejo de sale_price
-      if (expectedSale !== undefined) {
-        updateData.sale_price = formatPrice(expectedSale);
-      } else {
-        updateData.sale_price = ''; // Borrar precio de oferta si no aplica
+      if (product.precioActual && product.precioActual > 0) {
+        updateData.sale_price = product.precioActual.toString();
       }
 
       // Actualizar producto en WooCommerce
@@ -1213,17 +1183,15 @@ class ApiService {
       const nsStock = Number(p.existencia || 0);
       const inStock = nsStock > 0;
 
-      // Lógica de precios unificada y robusta
       const nsAnterior = Number(p.precioAnterior || 0);
       const nsActual = Number(p.precioActual || 0);
       let expectedRegular = 0;
       let expectedSale: number | undefined = undefined;
       const hasAnterior = nsAnterior > 0;
       const hasActual = nsActual > 0;
-      
       if (hasAnterior && hasActual) {
         expectedRegular = nsAnterior;
-        expectedSale = nsActual;
+        if (nsActual < nsAnterior) expectedSale = nsActual;
       } else if (hasActual) {
         expectedRegular = nsActual;
       } else if (hasAnterior) {
@@ -1233,41 +1201,29 @@ class ApiService {
       const upd: Partial<WooCommerceProduct> & { id: number } = { id: w.id };
       let changed = false;
 
-      // Función auxiliar para redondear (igual que en sync individual)
-      const formatPrice = (price: number) => Math.round(price).toString();
-
       if (!w.manage_stock) { upd.manage_stock = true; changed = true; }
       const wcStock = Number(w.stock_quantity ?? 0);
       if (wcStock !== nsStock) { upd.stock_quantity = nsStock; changed = true; }
       const wcInStock = !!w.in_stock;
       if (wcInStock !== inStock) { upd.in_stock = inStock; changed = true; }
 
-      // Comparación de precios para determinar si hay cambios
-      const newRegular = expectedRegular > 0 ? formatPrice(expectedRegular) : undefined;
-      const newSale = expectedSale !== undefined ? formatPrice(expectedSale) : '';
-      
-      const currentRegular = w.regular_price || '';
-      const currentSale = w.sale_price || '';
-      
-      const isDifferent = (a: string | number, b: string | number) => Math.round(Number(a || 0)) !== Math.round(Number(b || 0));
-      
-      let priceChanged = false;
-      
-      // Verificar cambios en regular_price
-      if (newRegular !== undefined && isDifferent(currentRegular, newRegular)) priceChanged = true;
-      
-      // Verificar cambios en sale_price
-      if (newSale === '') {
-        if (currentSale !== '') priceChanged = true;
-      } else {
-        if (isDifferent(currentSale, newSale)) priceChanged = true;
+      const wcRegular = Number(w.regular_price || 0);
+      if (expectedRegular > 0 && wcRegular !== expectedRegular) {
+        upd.regular_price = String(expectedRegular);
+        changed = true;
       }
 
-      // Si hay CUALQUIER cambio de precio, enviamos AMBOS para asegurar consistencia
-      if (priceChanged) {
-        if (newRegular !== undefined) upd.regular_price = newRegular;
-        upd.sale_price = newSale;
-        changed = true;
+      const wcSaleRaw = (w.sale_price ?? '').toString();
+      const wcSalePresent = wcSaleRaw.trim() !== '';
+      const wcSale = wcSalePresent ? Number(wcSaleRaw) : undefined;
+
+      if (expectedSale === undefined) {
+        if (wcSalePresent) { upd.sale_price = ''; changed = true; }
+      } else {
+        if (!wcSalePresent || wcSale !== expectedSale) {
+          upd.sale_price = String(expectedSale);
+          changed = true;
+        }
       }
 
       if (changed) diffs.push(upd);

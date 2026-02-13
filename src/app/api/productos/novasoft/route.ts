@@ -1,74 +1,87 @@
 import { NextResponse } from 'next/server';
-import { getNovasoftToken } from '@/lib/novasoft-auth';
 
+const AUTH_URL = process.env.NS_AUTH_URL || 'http://192.168.1.32:8082/api/Authenticate';
 const PRODUCTS_URL = process.env.NS_PRODUCTS_URL || 'http://192.168.1.32:8082/api/consultas/bodega-existencia';
+const USER = process.env.NOVASOFT_USER || '';
+const PASS = process.env.NOVASOFT_PASS || '';
 
-interface ProductsApiResponse {
-  data?: unknown[];
-  total_pages?: number;
+// Sencillo caché de token en memoria del proceso
+let cachedToken: string | null = null;
+let tokenExpiresAt = 0; // epoch ms
+
+async function getToken(): Promise<string> {
+  const now = Date.now();
+  if (cachedToken && tokenExpiresAt > now + 5000) {
+    return cachedToken;
+  }
+
+  const res = await fetch(`${AUTH_URL}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: USER, password: PASS })
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(`Login Novasoft falló (${res.status}): ${msg}`);
+  }
+
+  const data = await res.json();
+  const token = data.token || data.accessToken || data.access_token;
+  
+  if (!token) {
+      throw new Error('No se recibió token en la respuesta de login');
+  }
+  
+  cachedToken = token;
+  // Expira en 1 hora por defecto si no viene expiresIn
+  const expires = data.expiresIn || data.expires_at;
+  let ttlMs = 60 * 60 * 1000;
+  
+  if (typeof expires === 'number') {
+      ttlMs = expires * 1000;
+  } else if (typeof expires === 'string') {
+      const parsed = Date.parse(expires);
+      if (!isNaN(parsed)) {
+          ttlMs = parsed - Date.now();
+      }
+  }
+  
+  tokenExpiresAt = Date.now() + ttlMs;
+  return cachedToken!;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const token = await getNovasoftToken();
-
-    const url = new URL(PRODUCTS_URL);
-    url.searchParams.append('sucursal', 'cuc');
-    url.searchParams.append('bodega', '080');
-    url.searchParams.append('empresa', 'cbb sas');
-
-    const allProducts: unknown[] = [];
-    let page = 1;
-    let totalPages = 1;
-
-    do {
-      url.searchParams.set('page', page.toString());
-
-      const res = await fetch(url.toString(), {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!res.ok) {
-        const payload = await res.text();
-        return NextResponse.json(
-          { success: false, error: payload },
-          { status: res.status }
-        );
+    const { searchParams } = new URL(req.url);
+    const token = await getToken();
+    
+    // Forward query parameters
+    const targetUrl = new URL(PRODUCTS_URL);
+    searchParams.forEach((value, key) => {
+        targetUrl.searchParams.append(key, value);
+    });
+    
+    const res = await fetch(targetUrl.toString(), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
       }
+    });
 
-      const raw: unknown = await res.json();
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok) {
+      const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+      return NextResponse.json({ success: false, error: 'Error obteniendo productos', details: payload }, { status: res.status });
+    }
 
-      let pageData: unknown[] = [];
-
-      if (typeof raw === 'object' && raw !== null) {
-        const data = raw as ProductsApiResponse;
-
-        if (Array.isArray(data.data)) {
-          pageData = data.data;
-        } else if (Array.isArray(raw)) {
-          pageData = raw;
-        }
-
-        if (typeof data.total_pages === 'number') {
-          totalPages = data.total_pages;
-        }
-      }
-
-      allProducts.push(...pageData);
-      page++;
-    } while (page <= totalPages);
-
-    return NextResponse.json(allProducts);
+    const data = contentType.includes('application/json') ? await res.json() : await res.text();
+    // Normalizar a JSON si fuera texto
+    const body = typeof data === 'string' ? { raw: data } : data;
+    return NextResponse.json(body, { status: 200 });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Error desconocido';
-
-    return NextResponse.json(
-      { success: false, error: message },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : 'Error desconocido';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }

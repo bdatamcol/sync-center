@@ -18,8 +18,18 @@ interface AuthResponse {
 
 let cachedTokenInfo: TokenInfo | null = null;
 
-export async function getNovasoftToken(): Promise<string> {
+export function invalidateToken() {
+  console.log('[Novasoft Auth] Invalidating cached token manually.');
+  cachedTokenInfo = null;
+}
+
+export async function getNovasoftToken(forceRefresh = false): Promise<string> {
   const now = Date.now();
+  
+  if (forceRefresh) {
+    console.log('[Novasoft Auth] Force refresh requested.');
+    cachedTokenInfo = null;
+  }
   
   // If we have a valid token with at least 5 minutes remaining
   if (cachedTokenInfo && cachedTokenInfo.expiresAt > now + 5 * 60 * 1000) {

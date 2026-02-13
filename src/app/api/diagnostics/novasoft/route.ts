@@ -49,7 +49,7 @@ export async function GET() {
       const ct = res.headers.get('content-type') || ''
       if (ct.includes('application/json')) {
         const data = await res.json()
-        token = data?.token || data?.accessToken || data?.data?.token
+        token = data?.token || data?.accessToken || data?.access_token || data?.data?.token
         message = token ? 'Login exitoso' : 'Login sin token'
       } else {
         message = 'Login devolvió contenido no JSON'

@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, AlertCircle, Search, ChevronUp, ChevronDown, RotateCw, Plus, Download } from "lucide-react"
+import { RefreshCw, AlertCircle, Search, ChevronUp, ChevronDown, RotateCw, Plus } from "lucide-react"
 import { apiService, type Product, type SyncResult, type IndividualSyncResult } from "@/lib/api"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
@@ -118,56 +118,6 @@ export default function ProductosPage() {
     totalBatches: 0,
     completedBatches: 0,
   })
-
-  const handleExportCSV = () => {
-    const header = [
-      "Código",
-      "Descripción",
-      "Empresa",
-      "Stock",
-      "Precio Anterior",
-      "Precio Actual",
-      "Estado",
-      "Existe en WooCommerce",
-      "Precio coincide",
-      "Stock coincide",
-      "Sincronizado",
-    ]
-    const rows = filteredProducts.map((p) => {
-      const sku = (p.cod_item || "").trim()
-      const status = sku ? productSyncStatus.get(sku) : undefined
-      const exists =
-        sku && productExistence.has(sku) ? (productExistence.get(sku) ? "Sí" : "No") : ""
-      const priceMatches = status ? (status.priceMatches ? "Sí" : "No") : ""
-      const stockMatches = status ? (status.stockMatches ? "Sí" : "No") : ""
-      const synced = status ? (status.sincronizado ? "Sí" : "No") : ""
-      return [
-        sku,
-        (p.des_item || "").trim(),
-        p.empresa || "",
-        p.existencia ?? 0,
-        p.precioAnterior ?? "",
-        p.precioActual ?? "",
-        p.estado || "",
-        exists,
-        priceMatches,
-        stockMatches,
-        synced,
-      ]
-    })
-    const csv = [header, ...rows]
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `productos_${Date.now()}.csv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
 
   const fetchProducts = async () => {
     setLoading(true)
@@ -994,16 +944,6 @@ export default function ProductosPage() {
           </Button>
 
           <Button
-            onClick={handleExportCSV}
-            disabled={filteredProducts.length === 0}
-            className="flex items-center gap-2 cursor-pointer bg-gray-700 hover:bg-gray-800 text-white shadow-lg shadow-gray-600/20 disabled:opacity-50 transition-all duration-200"
-            title="Exportar datos visibles a Excel (CSV)"
-          >
-            <Download className="h-4 w-4" />
-            Exportar
-          </Button>
-
-          <Button
             onClick={runDiagnostics}
             disabled={diagnosing}
             className="flex items-center gap-2 cursor-pointer bg-slate-600 hover:bg-slate-700 text-white shadow-lg shadow-slate-600/20 disabled:opacity-50 transition-all duration-200"
@@ -1324,19 +1264,17 @@ export default function ProductosPage() {
               {syncStatus === "error" && <AlertCircle className="h-4 w-4 text-red-500" />}
               Sincronización con WooCommerce
             </DialogTitle>
-            <DialogDescription asChild>
-              <div className="text-sm text-muted-foreground">
-                {syncingProduct && (
-                  <div className="space-y-2">
-                    <div>
-                      <strong>Producto:</strong> {syncingProduct.cod_item}
-                    </div>
-                    <div>
-                      <strong>Descripción:</strong> {syncingProduct.des_item}
-                    </div>
+            <DialogDescription>
+              {syncingProduct && (
+                <div className="space-y-2">
+                  <div>
+                    <strong>Producto:</strong> {syncingProduct.cod_item}
                   </div>
-                )}
-              </div>
+                  <div>
+                    <strong>Descripción:</strong> {syncingProduct.des_item}
+                  </div>
+                </div>
+              )}
             </DialogDescription>
           </DialogHeader>
 

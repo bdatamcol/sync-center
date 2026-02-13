@@ -105,59 +105,6 @@ export default function DashboardPage() {
     return new Intl.NumberFormat('es-CO').format(value);
   };
 
-  const formatDate = (dateString: string | null | undefined) => {
-    if (!dateString) return '';
-    try {
-      return new Date(dateString).toLocaleDateString('es-CO');
-    } catch (e) {
-      return dateString || '';
-    }
-  };
-
-  const handleExportCSV = () => {
-    if (!filteredData || filteredData.length === 0) return;
-
-    const header = [
-      "Código",
-      "Descripción",
-      "Grupo",
-      "Marca",
-      "Ciudad",
-      "Empresa",
-      "Existencia",
-      "Valor",
-      "Última Compra",
-      "Días UC"
-    ];
-
-    const rows = filteredData.map((item) => [
-      item.COD_ITEM,
-      item.DES_ITEM,
-      item.NOM_GRU,
-      item.DES_MAR,
-      item.ciudad,
-      item.empresa,
-      item.EXISTENCIA,
-      item.VALOR,
-      item.ult_comp ? formatDate(item.ult_comp) : '',
-      item.DiasUC
-    ]);
-
-    const csv = [header, ...rows]
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `dashboard_inventario_${Date.now()}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   return (
     <div className="px-6 space-y-6">
       {/* Header */}

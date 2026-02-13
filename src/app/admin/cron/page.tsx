@@ -115,33 +115,6 @@ export default function CronHistoryPage() {
     URL.revokeObjectURL(url)
   }
 
-  const handleExportDetailsCSV = () => {
-    if (!details || !details.results) return
-
-    const header = ["SKU", "Nombre", "Existencia", "Precio Anterior", "Precio Actual", "Estado", "Mensaje", "Error"]
-    const rows = details.results.map((r) => [
-      r.sku,
-      r.name,
-      r.existencia ?? "",
-      r.precioAnterior ?? "",
-      r.precioActual ?? "",
-      r.success ? "Éxito" : "Fallo",
-      r.message ?? "",
-      r.error ?? "",
-    ])
-
-    const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `cron_detalle_${details.id}.csv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
   const loadDetails = async (id: string) => {
     setSelectedId(id)
     setDetails(null)
@@ -376,22 +349,12 @@ export default function CronHistoryPage() {
             <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col">
               <div className="border-b border-gray-200 px-8 py-6 flex justify-between items-center bg-gradient-to-r from-blue-50 to-white rounded-t-2xl">
                 <h2 className="text-2xl font-bold text-gray-900">Detalles de ejecución</h2>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={handleExportDetailsCSV}
-                    className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors shadow-sm"
-                    title="Exportar detalles a CSV"
-                  >
-                    <Download className="w-4 h-4" />
-                    Exportar
-                  </button>
-                  <button
-                    onClick={closeDetails}
-                    className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 transition-colors"
-                  >
-                    <span className="text-2xl">×</span>
-                  </button>
-                </div>
+                <button
+                  onClick={closeDetails}
+                  className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 transition-colors"
+                >
+                  <span className="text-2xl">×</span>
+                </button>
               </div>
               <div className="p-8 space-y-6 overflow-auto flex-1">
                 {detailsLoading && (
