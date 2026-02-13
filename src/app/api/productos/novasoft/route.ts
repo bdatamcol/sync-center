@@ -56,10 +56,20 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const token = await getToken();
     
-    // Forward query parameters
+    // Forward query parameters with defaults
     const targetUrl = new URL(PRODUCTS_URL);
+    
+    // Default params
+    if (!searchParams.has('sucursal')) targetUrl.searchParams.append('sucursal', 'cuc');
+    if (!searchParams.has('bodega')) targetUrl.searchParams.append('bodega', '080');
+    if (!searchParams.has('empresa')) targetUrl.searchParams.append('empresa', 'cbb sas');
+    if (!searchParams.has('page')) targetUrl.searchParams.append('page', '1');
+
     searchParams.forEach((value, key) => {
-        targetUrl.searchParams.append(key, value);
+        // Overwrite or append? URLSearchParams append by default. 
+        // We should delete defaults if user provided them, or just use set.
+        // Let's use set to enforce user provided values if present, or defaults if not.
+        targetUrl.searchParams.set(key, value);
     });
     
     const res = await fetch(targetUrl.toString(), {
